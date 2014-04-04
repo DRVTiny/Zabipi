@@ -20,6 +20,7 @@ sub new {
  return 1 unless @_; 
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
+ $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
  $Config{'flDebug'}=$hlOtherPars->{'debug'}=~m/y(?:es)?|true|1/?1:0 if $hlOtherPars;
  return 1;
