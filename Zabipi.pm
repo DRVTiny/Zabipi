@@ -70,7 +70,10 @@ sub zbx  {
  $req->{'params'}=getDefaultMethodParams($method);
  $req->{'method'}=$method;
 # Set common params
- unless ( $what2do =~ m/^[a-z]+?\.[a-z]+$/) {
+ if ( $what2do =~ m/^[a-z]+?\.[a-z]+$/) {
+  my $userParams=shift;
+  @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
+ } else {
   if ($what2do eq 'auth') {
    if (!(@_ == 2 or @_ == 3)) {
     setErr 'You must specify (only) login and password for auth';
@@ -106,13 +109,16 @@ sub zbx  {
   }
  }
  @{$req}{('auth','id')}=($Config{'authToken'},1) if $Config{'authToken'};
- my $userParams=shift;
- @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
-  
- my $http_post = HTTP::Request->new(POST => $Config{'apiUrl'});
+ 
+ # Redefine global config variables if it is needed
+ my %ConfigCopy=%Config;
+ my $confPars=shift;
+ @ConfigCopy{keys %{$confPars}}=values %{$confPars} if ref($confPars) eq 'HASH';
+ 
+ my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
- print "JSON request:\n${jsonrq}\n" if $Config{'flDebug'};
+ print "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
  $http_post->content($jsonrq);
  my $ans=$ua->request($http_post);
  unless ( $ans->is_success ) {
@@ -120,7 +126,7 @@ sub zbx  {
   return 0;
  }
  
- print "Decoded content from POST:\n\t".$ans->decoded_content . "\n" if $Config{'flDebug'};
+ print "Decoded content from POST:\n\t".$ans->decoded_content . "\n" if $ConfigCopy{'flDebug'};
  my $hAns = decode_json($ans->decoded_content);
  if ($hAns->{'error'}) {
   setErr 'Error received from server in reply to JSON request: '.$hAns->{'error'}{'data'}."\n";
@@ -128,7 +134,7 @@ sub zbx  {
  }
  
  if ($what2do eq 'auth') {
-  print 'Get auth token='.$hAns->{'result'}."\n" if $Config{'flDebug'};
+  print 'Get auth token='.$hAns->{'result'}."\n" if $ConfigCopy{'flDebug'};
   $Config{'authToken'}=$hAns->{'result'};
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
   return $hAns->{'result'}->[0];
