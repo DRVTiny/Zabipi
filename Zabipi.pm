@@ -1,10 +1,12 @@
 #!/usr/bin/perl
 package Monitoring::Zabipi;
+use utf8;
+#binmode(STDOUT, ":utf8");  
 use strict;
 use warnings;
 
 use Exporter qw(import);
-our @EXPORT_OK=qw(new zbx last_err);
+our @EXPORT_OK=qw(new zbx last_err zbx_json_raw);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
@@ -15,6 +17,7 @@ my %Config=(
 );
 
 my %ErrMsg;
+my $JSONRaw;
 
 sub new {
  return 1 unless @_; 
@@ -36,11 +39,35 @@ sub last_err {
  return $ErrMsg{'text'} || 0;
 }
 
+sub zbx_json_raw {
+ return $JSONRaw;
+}
+
 sub getDefaultMethodParams {
  my $method=shift;
  my ($mpar,$cpar)=@{$Config{'default_params'}}{($method,'common')};  
  return {} unless $mpar or $cpar;
  return { ref($cpar) eq 'HASH'?%{$cpar}:(),ref($mpar) eq 'HASH'?%{$mpar}:() };
+}
+
+sub doItemNameExpansion {
+ foreach my $item (@{scalar(shift)}) {
+  my ($itemName,$itemKey)=@{$item}{('name','key_')};
+  my %h=map { $_=>1 } ($itemName=~m/\$([1-9])/g);
+  unless ( %h ) {
+   $item->{'name_expanded'}=$itemName;
+   next;
+  }
+  for ($itemKey) {
+   s%[^\[]+\[\s*%%;
+   s%\]\s*$%%;
+  }
+  
+  my @l=map { s/(?:^['"]|['"]$)//g; $_ } ($itemKey=~m/(?:^|,)\s*("[^"]*"|'[^']*'|[^'",]*)\s*(?=(?:,|$))/g);
+  $itemName=~s/\$$_/$l[$_-1]/g foreach keys %h;
+  $item->{'name_expanded'}=$itemName;
+ }
+ return 1;
 }
 
 # zbx internally doing some awful strange things such as:
@@ -69,10 +96,25 @@ sub zbx  {
  }
  $req->{'params'}=getDefaultMethodParams($method);
  $req->{'method'}=$method;
+ my $flExpandNames=undef;
 # Set common params
  if ( $what2do =~ m/^[a-z]+?\.[a-z]+$/) {
   my $userParams=shift;
   @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
+  if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
+   delete $req->{'params'}{'expandNames'};
+   $flExpandNames=1;
+   my $outcfg=$req->{'params'}{'output'};
+   unless ($outcfg eq 'extend') {
+    if (ref $outcfg eq 'ARRAY') {
+     foreach my $mandAttr ('name','key_') {
+      push @{$outcfg},$mandAttr unless grep { $_ eq $mandAttr } @{$outcfg};
+     }
+    } else {
+     $req->{'params'}{'output'}='extend';
+    }
+   }
+  }
  } else {
   if ($what2do eq 'auth') {
    if (!(@_ == 2 or @_ == 3)) {
@@ -125,21 +167,24 @@ sub zbx  {
   setErr 'HTTP POST request failed for some reason. Please double check, what you requested';
   return 0;
  }
- 
- print "Decoded content from POST:\n\t".$ans->decoded_content . "\n" if $ConfigCopy{'flDebug'};
- my $hAns = decode_json($ans->decoded_content);
- if ($hAns->{'error'}) {
-  setErr 'Error received from server in reply to JSON request: '.$hAns->{'error'}{'data'}."\n";
+ my $JSONAns=$ans->decoded_content;
+ $JSONRaw=$JSONAns;
+ print "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
+ return $JSONAns if $ConfigCopy{'flRetRawJSON'};
+ $JSONAns = decode_json( $JSONAns );
+ if ($JSONAns->{'error'}) {
+  setErr 'Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'}."\n";
   return 0;
  }
  
  if ($what2do eq 'auth') {
-  print 'Get auth token='.$hAns->{'result'}."\n" if $ConfigCopy{'flDebug'};
-  $Config{'authToken'}=$hAns->{'result'};
+  print 'Get auth token='.$JSONAns->{'result'}."\n" if $ConfigCopy{'flDebug'};
+  $Config{'authToken'}=$JSONAns->{'result'};
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
-  return $hAns->{'result'}->[0];
- }
- return $hAns->{'result'};
+  return $JSONAns->{'result'}->[0];
+ } 
+ doItemNameExpansion($JSONAns->{'result'}) if $flExpandNames;
+ return $JSONAns->{'result'};
 }
 
 1;
