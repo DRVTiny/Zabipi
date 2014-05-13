@@ -51,7 +51,9 @@ sub getDefaultMethodParams {
 }
 
 sub doItemNameExpansion {
- foreach my $item (@{scalar(shift)}) {
+ my ($items,@unsetKeys)=@_;
+ 
+ foreach my $item ( @{$items} ) {
   my ($itemName,$itemKey)=@{$item}{('name','key_')};
   my %h=map { $_=>1 } ($itemName=~m/\$([1-9])/g);
   unless ( %h ) {
@@ -66,6 +68,7 @@ sub doItemNameExpansion {
   my @l=map { s/(?:^['"]|['"]$)//g; $_ } ($itemKey=~m/(?:^|,)\s*("[^"]*"|'[^']*'|[^'",]*)\s*(?=(?:,|$))/g);
   $itemName=~s/\$$_/$l[$_-1]/g foreach keys %h;
   $item->{'name_expanded'}=$itemName;
+  delete @{$item}{@unsetKeys} if @unsetKeys;
  }
  return 1;
 }
@@ -97,6 +100,7 @@ sub zbx  {
  $req->{'params'}=getDefaultMethodParams($method);
  $req->{'method'}=$method;
  my $flExpandNames=undef;
+ my @UnsetKeysInResult=();
 # Set common params
  if ( $what2do =~ m/^[a-z]+?\.[a-z]+$/) {
   my $userParams=shift;
@@ -108,7 +112,10 @@ sub zbx  {
    unless ($outcfg eq 'extend') {
     if (ref $outcfg eq 'ARRAY') {
      foreach my $mandAttr ('name','key_') {
-      push @{$outcfg},$mandAttr unless grep { $_ eq $mandAttr } @{$outcfg};
+      unless ( grep { $_ eq $mandAttr } @{$outcfg} ) {
+       push @{$outcfg},$mandAttr;
+       push @UnsetKeysInResult,$mandAttr;
+      }
      }
     } else {
      $req->{'params'}{'output'}='extend';
@@ -173,18 +180,22 @@ sub zbx  {
  return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );
  if ($JSONAns->{'error'}) {
-  setErr 'Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'}."\n";
+  setErr 'Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'};
   return 0;
  }
- 
+ my $rslt=$JSONAns->{'result'};
+ unless ($rslt) {
+  setErr 'Cant get result in JSON response for unknown reason (no error was returned from Zabbix API)';
+  return 0;
+ }
  if ($what2do eq 'auth') {
-  print 'Get auth token='.$JSONAns->{'result'}."\n" if $ConfigCopy{'flDebug'};
-  $Config{'authToken'}=$JSONAns->{'result'};
+  print "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
+  $Config{'authToken'}=$rslt;
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
-  return $JSONAns->{'result'}->[0];
+  return $rslt->[0];
  } 
- doItemNameExpansion($JSONAns->{'result'}) if $flExpandNames;
- return $JSONAns->{'result'};
+ doItemNameExpansion($rslt,@UnsetKeysInResult) if $flExpandNames;
+ return $rslt;
 }
 
 1;
