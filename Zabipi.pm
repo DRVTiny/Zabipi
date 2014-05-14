@@ -6,7 +6,7 @@ use strict;
 use warnings;
 
 use Exporter qw(import);
-our @EXPORT_OK=qw(new zbx last_err zbx_json_raw);
+our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
@@ -31,11 +31,11 @@ sub new {
 
 sub setErr {
  $ErrMsg{'text'}=join(' ',@_);
- print $ErrMsg{'text'}."\n" if $Config{'flDebug'};
+ print STDERR $ErrMsg{'text'}."\n" if $Config{'flDebug'};
  return 1;
 }
 
-sub last_err {
+sub zbx_last_err {
  return $ErrMsg{'text'} || 0;
 }
 
@@ -167,7 +167,7 @@ sub zbx  {
  my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
- print "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
+ print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
  $http_post->content($jsonrq);
  my $ans=$ua->request($http_post);
  unless ( $ans->is_success ) {
@@ -176,7 +176,7 @@ sub zbx  {
  }
  my $JSONAns=$ans->decoded_content;
  $JSONRaw=$JSONAns;
- print "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
+ print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
  return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );
  if ($JSONAns->{'error'}) {
@@ -189,7 +189,7 @@ sub zbx  {
   return 0;
  }
  if ($what2do eq 'auth') {
-  print "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
+  print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
   $Config{'authToken'}=$rslt;
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
   return $rslt->[0];
