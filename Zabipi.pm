@@ -20,12 +20,28 @@ my %ErrMsg;
 my $JSONRaw;
 
 sub new {
- return 1 unless @_; 
+ return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
- $Config{'flDebug'}=$hlOtherPars->{'debug'}=~m/y(?:es)?|true|1/?1:0 if $hlOtherPars;
+ return 0 if defined($hlOtherPars) && ! (ref($hlOtherPars) eq 'HASH');
+ if (defined($hlOtherPars)) {
+  $Config{'flDebug'}=(defined($hlOtherPars->{'debug'}) && $hlOtherPars->{'debug'}=~m/y(?:es)?|true|1/)?1:0;
+  if (defined $hlOtherPars->{'debug_methods'}) {
+   my $lstMethods2Dbg=$hlOtherPars->{'debug_methods'};
+   if (! ref $lstMethods2Dbg) {
+    $Config{'lstDebugMethods'}={ map { lc($_)=>1 } split /[,;]/,$lstMethods2Dbg };
+   } elsif ((ref $lstMethods2Dbg eq 'HASH') && %{$lstMethods2Dbg} ) {
+    $Config{'lstDebugMethods'}=$lstMethods2Dbg;
+   } elsif ((ref $lstMethods2Dbg eq 'ARRAY') && @{$lstMethods2Dbg}) {
+    $Config{'lstDebugMethods'}={ map { lc($_)=>1 } @{$lstMethods2Dbg} };
+   } else {
+    print STDERR 'ERROR: List of the methods to debug may be: hashref, arrayref, string';
+    return 0;
+   }
+  }
+ }
  return 1;
 }
 
@@ -162,6 +178,7 @@ sub zbx  {
  # Redefine global config variables if it is needed
  my %ConfigCopy=%Config;
  my $confPars=shift;
+ $ConfigCopy{'flDebug'}=$ConfigCopy{'lstDebugMethods'}{$what2do} if defined($ConfigCopy{'lstDebugMethods'});
  @ConfigCopy{keys %{$confPars}}=values %{$confPars} if ref($confPars) eq 'HASH';
  
  my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
@@ -175,7 +192,7 @@ sub zbx  {
   return 0;
  }
  my $JSONAns=$ans->decoded_content;
- $JSONRaw=$JSONAns;
+ $JSONRaw=$JSONAns;  
  print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
  return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );
