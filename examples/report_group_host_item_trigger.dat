@@ -1,0 +1,113 @@
+use Data::Dumper qw(Dumper);
+# Static definitions ->
+sub getHostIP {
+ my $T=shift;
+ my $hst=$T->{'Host'}{'var'};
+ my $ip;
+ if ($T->{'Group'}{'var'}{'name'}=~m/Функции/) {
+  $ip='неприменимо';
+ } else {
+  $hst->{'name'}=$hst->{'host'};
+  $ip=&main::zbx('hostinterface.get',{'hostids'=>$hst->{'hostid'},output=>['ip']})->[0]{'ip'};
+  $ip=$ip eq '127.0.0.1'?'неприменимо':$ip;
+ }
+ return $ip; 
+}
+
+sub hasTriggers { 
+ my $trgs=shift->{'Item'}{'var'}{'triggers'};
+ return ((ref($trgs) eq 'ARRAY' && @{$trgs}) || $trgs>0 )?'Да':'Нет';
+}
+
+%hdr=(   'Group'=>
+           {'labels'=>['Наименование ИС'],
+              'keys'=>['name'           ],
+            'prefid'=>0,
+           },
+         'Host'=>
+           {'labels'=>['Хост', 'IP адрес'  , 'Протокол', 'Метод опроса'],
+              'keys'=>['name', \&getHostIP , 'protocol', 'method'      ],
+            'prefid'=>1,
+           },
+         'Application'=>
+           {'labels'=>['Группа параметров'],
+              'keys'=>['name'             ],
+            'prefid'=>2,
+           },
+         'Item'=>
+           {'labels'=>['Параметр',      'Наличие триггера'],
+              'keys'=>['name_expanded', \&hasTriggers     ],
+            'prefid'=>3,
+           },
+         'Trigger'=>
+           {'labels'=>['Имя',         'Выражение' , 'Значение'],
+              'keys'=>['description', 'expression', 'value'   ],
+            'prefid'=>4,
+           },
+        );
+
+@ItemTypes=(
+        'Zabbix агент',
+        'SNMPv1 агент',
+        'Zabbix траппер',
+        'простая проверка',
+        'SNMPv2 агент',
+        'внутренняя проверка Zabbix',
+        'SNMPv3 агент',
+        'Zabbix агент (активная)',
+        'Zabbix агреггированное',
+        'веб проверка',
+        'внешняя проверка',
+        'монитор базы данных',
+        'IPMI агент',
+        'SSH агент',
+        'TELNET агент',
+        'вычисляемое значение',
+        'JMX агент',
+        'SNMP ловушка'
+);
+
+@HostAvail=('неизвестно','доступен','недоступен');
+@TrigPriors=('Не классифицировано','Информация','Низкая','Средняя','Высокая','Чрезвычайная');
+@TrigVals=('OK','Проблема');
+
+%MandKeys=('Group'=>{
+                      'name'=>1,
+                    },
+            'Host'=>{
+                      'host'=>1,
+		      'name'=>1,
+                    },
+     'Application'=>{
+		      'name'=>1,
+                    },   
+	    'Item'=>{
+		      'name'=>1,
+                    },
+         'Trigger'=>{
+                      'name'=>1,
+                    }
+          );
+
+sub cnvErr { return shift || ' ' };
+
+my @tmp=('Best');
+
+%AttrConvs=(
+        'Host'=>{'available'=>sub { return $HostAvail[scalar(shift)] },
+                 'status'=>sub { return scalar(shift)?'не выполняется':'выполняется' },
+                 'error'=>\&cnvErr,
+                 'name'=>sub { return $tmp[0].' '.scalar(shift).' in the world!' },
+                },
+        'Item'=>{'type'=>sub { return $ItemTypes[scalar(shift)] },
+		 'state'=>sub { return scalar(shift)?'не поддерживается':'поддерживается' },
+		 'error'=>\&cnvErr,
+                },              
+     'Trigger'=>{'state'=>sub { return scalar(shift)?'неизвестно':'актуально' },
+		 'value'=>sub { my $v=shift; return shift->{'status'}?'N/A':$TrigVals[$v] },
+		 'status'=>sub { return scalar(shift)?'отключен':'включен' },
+		 'priority'=>sub { return $TrigPriors[scalar(shift)] },
+                }
+       );
+
+# <- Static definitions
