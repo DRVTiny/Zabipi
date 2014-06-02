@@ -6,6 +6,7 @@ BEGIN {
 use strict;
 use utf8;
 use JSON qw(decode_json);
+use Text::Aligner qw(align);
 use Data::Dumper;
 use Getopt::Long qw(GetOptions);
 use Monitoring::Zabipi qw(zbx zbx_last_err);
@@ -25,62 +26,9 @@ my %FE=('server' => DFLT_FRONTEND_HOST,
        );
 # <- By default...
 
-# Static definitions ->
-my %hdr=('Group'=>
-           {'labels'=>['Группа'],
-              'keys'=>['name'  ],
-            'prefid'=>0,
-           },
-         'Host'=>
-           {'labels'=>['Хост','IP адрес','Статус мониторинга','Доступность агента','Сообщение об ошибке'],
-              'keys'=>['name','ip'      ,'status'            ,'available'         ,'error'              ],
-            'prefid'=>1,
-           },
-         'Application'=>
-           {'labels'=>['Группа параметров'],
-              'keys'=>['name'             ],
-            'prefid'=>2,
-           },
-         'Item'=>
-           {'labels'=>['Параметр мониторинга','Интервал опроса (сек)','Период хранения истории (дней)','Период хранения трендов (дней)','Тип параметра','Поддерживается ли агентом?','Сообщение об ошибке'],
-              'keys'=>['name_expanded'       ,'delay'                ,'history'                       ,'trends',                       ,'type'         ,'state'                     ,'error'              ],
-            'prefid'=>3,
-           },
-         'Trigger'=>
-           {'labels'=>['Триггер'     , 'Критичность', 'Статус триггера', 'Включен?', 'Как вычисляется триггер (пороговое значение)', 'Сообщение об ошибке', 'Текущее значение'],
-              'keys'=>['description' , 'priority'   , 'state'          , 'status'  , 'expression'                                  , 'error'              , 'value'           ],
-            'prefid'=>4,
-           }
-        );
-
-my @ItemTypes=(
-   'Zabbix агент',
-   'SNMPv1 агент',
-   'Zabbix траппер',
-   'простая проверка',
-   'SNMPv2 агент',
-   'внутренняя проверка Zabbix',
-   'SNMPv3 агент',
-   'Zabbix агент (активная)',
-   'Zabbix агреггированное',
-   'веб проверка',
-   'внешняя проверка',
-   'монитор базы данных',
-   'IPMI агент',
-   'SSH агент',
-   'TELNET агент',
-   'вычисляемое значение',
-   'JMX агент',
-   'SNMP ловушка'
-);
-
-my @HostAvail=('неизвестно','доступен','недоступен');
-my @TrigPriors=('Не классифицировано','Информация','Низкая','Средняя','Высокая','Чрезвычайная');
-my @TrigVals=('OK','Проблема');
-# <- Static definitions
-
 my %options;
-@options{('lstConnPars','excludeGroups','lstBlockSeq','lstColMap','CSVFldSep')}=([],[],[],[],DFLT_CSV_FIELD_SEP,DFLT_TEXT_QUOTE);
+@options{('staticData','lstConnPars','excludeGroups','lstBlockSeq','lstColMap','CSVFldSep')}=
+         (substr($0,0,rindex($0,".")).'.dat',[],[],[],[],DFLT_CSV_FIELD_SEP,DFLT_TEXT_QUOTE);
 
 my %OptsDescr=(
             'synopsis'=>$0.' -s @CONNECT_OPTIONS [-g INCLUDE_GROUP] [-x @EXCLUDE_GROUPS] [-b @BLOCK_SEQ] [-d OUTDIR] [-t] [-o] [-v{1,}] [-m @COLUMN_MAP] [-f FLD_SEP] [-q TEXT_QUOTE]',
@@ -90,46 +38,36 @@ my %OptsDescr=(
               [['g','only-groups'],'=s@',\$options{'searchGroupName'},'Вывести информацию только по группам с именами, соответствующими шаблону'],
               [['o','stdout'],'',\$options{'flWriteToSTDOUT'},'Выводить результат в стандартный поток вывода, а не в файл'],
               [['s','server'],'=s{3}',$options{'lstConnPars'},'Список параметров подключения к серверу фронтенда Zabbix: ИмяХоста Логин Пароль'],
-              [['d','dirpath'],'=s',$options{'lstConnPars'},'Путь для сохранения файлов результата'],
-              [['m','column-map'],'=i{1,'.scalar(keys %hdr).'}',$options{'lstColMap'},'Порядок следования столбцов вывода (для перестановки столбцов и/или сокращения их количества)'],
+              [['d','dirpath'],'=s',\$options{'pthWorkDir'},'Путь для сохранения файлов результата'],
+              [['m','column-map'],'=i{1,100}',$options{'lstColMap'},'Порядок следования столбцов вывода (для перестановки столбцов и/или сокращения их количества)'],
               [['f','field-sep'],'=s',\$options{'CSVFldSep'},'Разделитель полей в CSV-выводе'],
               [['q','text-quote'],'=s',\$options{'TextQuote'},'Тип кавычек для обрамления текстовых пполей'],
               [['v','verbose'],'+',\$options{'flBeVerbose'},'Уровень подробности вывода отладочных соообщений (допускает многократное указание для повышения подробности вывода)'],
-              [['b','blockseq'],'=s{1,'.scalar(keys %hdr).'}',$options{'lstBlockSeq'},'Последовательность вывода блоков информации. Пример: -b "Host" "Item" "Group"'],
+              [['b','blockseq'],'=s{1,100}',$options{'lstBlockSeq'},'Последовательность вывода блоков информации. Пример: -b "Host" "Item" "Group"'],
+              [['data-here'],'=s',\$options{'staticData'},'Путь к файлу со статическими данными (описание формата CSV и пр.)'],
             ]
            );
 
 sub doGetOpts {
  my $descr=shift;
  my $usage="Usage:\n\t".$descr->{'synopsis'}."\n";
- my %hsh4gol;
+ my (%hsh4gol,@UsageKeys,@UsageDesc);
+ push @{$descr->{'params'}},[['usage'],'',sub { print "$usage"; exit(0); },'Показать ровным счётом то, что вы видите сейчас'];
  foreach my $opt (@{$descr->{'params'}}) {
-  $usage.=join (' ',map { length($_)==1?'-'.$_:'--'.$_ } @{$opt->[0]})."\t".$opt->[3]."\n";  
+  push @UsageKeys,join (' ',map { length($_)==1?'-'.$_:'--'.$_ } @{$opt->[0]});
+  push @UsageDesc,$opt->[3];
   $hsh4gol{join('|',@{$opt->[0]}).$opt->[1]}=$opt->[2];
  }
- print $usage;
- print Dumper(\%hsh4gol)."\n";
+ @UsageKeys=align('left',@UsageKeys);
+ @UsageDesc=align('left',@UsageDesc);
+ for (my $i=0; $i<scalar(@UsageKeys); $i++) {
+  $usage.=$UsageKeys[$i]."\t".$UsageDesc[$i]."\n";
+ }
  GetOptions(%hsh4gol);
  return 1;
 }
 
 doGetOpts(\%OptsDescr);
-exit(0);
-
-GetOptions(
-        't|show-triggers!'    => \$options{'flShowTriggers'},
-        'x|exclude-groups=s@' => $options{'excludeGroups'},
-        'g|only-groups=s@'    => \$options{'searchGroupName'},
-        'o|stdout'            => \$options{'flWriteToSTDOUT'},
-        'e|name-expand-cmd=s' => \$options{'cmdNameExpander'},
-        's|server|connect-pars=s{3}'=>$options{'lstConnPars'},
-        'd|dirpath=s'         => \$options{'pthWorkDir'},
-        'f|field-sep=s'       => \$options{'CSVFldSep'},
-        'q|text-quote=s'      => \$options{'TextQuote'},
-        'm|column-map=i{1,'.scalar(keys %hdr).'}' => $options{'lstColMap'},
-        'v|verbose+'           => \$options{'flBeVerbose'},
-        'b|blockseq=s{1,'.scalar(keys %hdr).'}' => $options{'lstBlockSeq'},
-);
 
 print "Following options was passed to me: \n".Dumper(\%options) if $options{'flBeVerbose'};
 
@@ -149,15 +87,18 @@ if ($options{'lstConnPars'}) {
  }
 }
 
+our (%hdr,@ItemTypes,@HostAvail,@TrigPriors,@TrigVals);
+do $options{'staticData'} || die 'Cant include our static data file "'.$options{'staticData'}.'"';
+
 sub getCsvLine {
  my ($what2get,$objs,$par)=@_;
  my $fldsep=$par->{'fldsep'} || ';';
  my $textq=$par->{'textq'}?substr($par->{'textq'},0,1):"'";
  my @out;
- 
  if      ($what2get eq 'row'   ) {
-  foreach ( @{$objs} ) {
-   push @out, map { $_=~m/^[0-9]*$/?$_:$textq.$_.$textq } @{$_->{'var'}}{ @{$_->{'keys'}} };
+  my $duh={};
+  foreach ( @{$objs} ) {  
+   push @out, map { $_=~m/^[0-9]*$/?$_:$textq.$_.$textq } @{$_->{'var'} || $duh}{ @{$_->{'keys'}} };
   }
  } elsif ($what2get eq 'header') {
   push @out, map { $textq.$_.$textq } @{$_->{'labels'}} foreach @{$objs};
