@@ -81,31 +81,8 @@ if ($options{'lstConnPars'}) {
 our (%hdr,@ItemTypes,@HostAvail,@TrigPriors,@TrigVals,%MandKeys,%AttrConvs);
 do $options{'staticData'} || die 'Cant include our static data file "'.$options{'staticData'}.'"';
 
-sub getCsvLine {
- my ($what2get,$objs,$par,$passedToSubs)=@_;
- my $fldsep=$par->{'fldsep'} || ';';
- my $textq=substr($par->{'textq'},0,1);
- my @out;
- if      ($what2get eq 'row'   ) {
-  foreach my $o ( @{$objs} ) {
-   my $ov=$o->{'var'};
-   my $p2s=defined($passedToSubs)?$passedToSubs:$ov;
-   if ($ov && (ref($ov) eq 'HASH')) {
-    foreach (@{$o->{'keys'}}) {
-     my $v=(ref($_) eq 'CODE')?&{$_}($p2s):$ov->{$_};
-     push @out,$v=~m/^[0-9]*$/?$v:$textq.$v.$textq;
-    }
-   } else {
-    push @out, ('') x scalar @{$o->{'keys'}};
-   }
-  }
- } elsif ($what2get eq 'header') {
-  push @out, map { $textq.$_.$textq } @{$_->{'labels'}} foreach @{$objs};
- }
-
- @out=map {$out[$_]} @{$par->{'fldmap'}} if (ref($par->{'fldmap'}) eq 'ARRAY') && @{$par->{'fldmap'}};
-
- return join($fldsep,@out);
+sub getHeader {
+ return map { @{$_->{'labels'}} } @{scalar(shift)}; 
 }
 
 sub getCsvObj {
@@ -116,16 +93,6 @@ sub getCsvObj {
        :
    ('') x scalar @{$obj->{'keys'}} ];
 }
-
-#sub csvFormat {
-# my ($CSVFormat,$Vals)=@_;
-# my $fldSep=$CSVFormat->{'fldsep'} || ';';
-# my $txtQ=substr($CSVFormat->{'textq'},0,1);
-# return $txtQ eq ''?
-#     join($fldSep, @{$Vals})
-#                   :
-#     join($fldSep, map { $_=~m/^[0-9]*$/?$_:$txtQ.$_.$txtQ } @{$Vals});
-#}
 
 sub pushToTree {
  my ($tLevel,$slfProps)=@_;
@@ -156,10 +123,18 @@ sub lstTree {
  return @out;
 }
 
+sub quoteText {
+ my ($text,$quote)=@_;
+ return $text unless length($text) and length($quote) and $text!~m/^(?:[0-9]+(?:\.[0-9]+)?)?$/;
+ $text=~s/${quote}/${quote}${quote}/go;
+ return $quote.$text.$quote;
+}
+
 my @bseq=@{$options{'lstBlockSeq'}}?
           grep { defined($hdr{$_}) } @{$options{'lstBlockSeq'}}
                :
           sort { $hdr{$a}{'prefid'} <=> $hdr{$b}{'prefid'} } ($flShowTriggers?keys %hdr:grep !/Trigger/,keys %hdr);          
+
 my @objs=map { $hdr{$_} } @bseq;
 
 die 'There are no Zabbix objects to output defined' unless @objs;
@@ -202,7 +177,7 @@ my %tLevel=('Group'=>$tCSV);
 # groups -> 
 foreach my $grp ( @{$grps} ) {
  convAttrs($grp,\%hdr,'Group',\%AttrConvs);
- 
+  
  $tLevel{'Host'}=pushToTree($tLevel{'Group'},getCsvObj($hdr{'Group'},\%hdr));
  # hosts -> 
  foreach my $hst ( @{zbx('host.get',{'groupids'=>$grp->{'groupid'},'output'=>$keys2rq{'Host'}})} ) {
@@ -222,28 +197,33 @@ foreach my $grp ( @{$grps} ) {
    $tLevel{'Item'}=pushToTree($tLevel{'Application'},getCsvObj($hdr{'Application'},\%hdr));
    
    #  items ->
-   foreach my $item ( @{ zbx('item.get',{$SearchItemsByKey=>$app->{'applicationid'},'expandNames'=>1,'selectTriggers'=>$flShowTriggers?'extend':'count','output'=>$keys2rq{'Item'}}) } ) {
+   foreach my $item ( @{ zbx('item.get',{$SearchItemsByKey=>$app->{'applicationid'},'expandNames'=>1,'selectTriggers'=>$flShowTriggers?['triggerid']:'count','output'=>$keys2rq{'Item'}}) } ) {
     convAttrs($item,\%hdr,'Item',\%AttrConvs);
     $tLevel{'Trigger'}=pushToTree($tLevel{'Item'},getCsvObj($hdr{'Item'},\%hdr));
     
-    next unless $flShowTriggers;
-    do { pushToTree($tLevel{'Trigger'},[]); next; } unless @{$item->{'triggers'}};
+    next unless $flShowTriggers and scalar(@{$item->{'triggers'}});
     # trigs ->
-    foreach my $trig ( @{zbx('trigger.get',{'triggerids'=>[map {$_->{'triggerid'}} $item->{'triggers'}],'expandExpression'=>1,'expandDescription'=>1,'output'=>$keys2rq{'Trigger'} })}  ) {
+    foreach my $trig ( @{zbx('trigger.get',{'triggerids'=>[map {$_->{'triggerid'}} @{$item->{'triggers'}}],'expandExpression'=>1,'expandDescription'=>1,'output'=>$keys2rq{'Trigger'} })}  ) {
      convAttrs($trig,\%hdr,'Trigger',\%AttrConvs);     
      pushToTree($tLevel{'Trigger'},getCsvObj($hdr{'Trigger'},\%hdr));
-     
+      
     } # <- trigs
    } # <- items
   } # <- apps
  } # <- hosts 
 } # <- groups
 
+
+#print Dumper($tCSV);
+#exit; 
+
 my ($csvSep,$csvTQ,$fldMap)=@{$CSVPars}{('fldsep','textq')};
 my $flToSTDOUT=$options{'flWriteToSTDOUT'};
 my $flUseMap=$CSVPars->{'usemap'};
 my @fldmap=();
 @fldmap=@{$CSVPars->{'fldmap'}} if $flUseMap;
+
+
 
 *FH=*STDOUT if $flToSTDOUT;
 foreach my $grp ( @{$tCSV} ) {
@@ -254,26 +234,13 @@ foreach my $grp ( @{$tCSV} ) {
   print STDERR "Пишем в файл: $groupFileName\n" if $options{'flBeVerbose'};
  }
  $hdr{'Host'}{'labels'}[0]=($groupName=~m/Функции/)?'Наименование ФИС':'Имя хоста ИИС';
- print FH getCsvLine('header',\@objs,$CSVPars)."\n";
+ my @HL=getHeader(\@objs);
+ print FH join($csvSep,map { quoteText($_,$csvTQ) } @HL)."\n";
  unless ($flUseMap) {
-  print FH join("\n",map { my $line=$_; join($csvSep,map { $_=~m/^[0-9]*$/?$_:$csvTQ.$_.$csvTQ } @{$line}) } lstTree($grp))."\n";
+  print FH join("\n",map { my $line=$_; join($csvSep,(map { quoteText($_,$csvTQ) } @{$line}),('') x (scalar(@HL)-scalar(@{$line}))) } lstTree($grp))."\n";
  } else {
-  print FH join("\n",map { my $line=$_; join($csvSep,map { my $e=$line->[$_]; $e=~m/^[0-9]*$/?$e:$csvTQ.$e.$csvTQ } @fldmap) } lstTree($grp))."\n";
+  my @empty=('') x (scalar(@HL)-scalar(@fldmap));  
+  print FH join("\n",map { my $line=$_; join($csvSep,(map { my $e=$line->[$_]; quoteText($e,$csvTQ) } @fldmap),@empty) } lstTree($grp))."\n";
  }
  close(FH) unless $flToSTDOUT;
 }
- 
-=pod
-#my @OUT=outTree($tCSV,$csvSep,$csvTQ);
-foreach my $groupName ( map {$_->[0][0]} @{$tCSV} ) {
- my $groupFileName="$options{'pthWorkDir'}/${groupName}.csv";
- if (!$options{'flWriteToSTDOUT'}) {
-  open (FH,'>',$groupFileName) || die "Cant open $groupFileName for write";
-  print STDERR "Пишем в файл: $groupFileName\n" if $options{'flBeVerbose'};
- }
- $hdr{'Host'}{'labels'}[0]=($groupName=~m/Функции/)?'Наименование ФИС':'Имя хоста ИИС';
- print FH getCsvLine('header',\@objs,$CSVPars)."\n";
- print FH join("\n",grep { substr($_,0,index($_,$csvSep)) eq $csvTQ.$groupName.$csvTQ } @OUT)."\n";
- close(FH) unless $options{'flWriteToSTDOUT'};
-}
-=cut

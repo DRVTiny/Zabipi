@@ -184,6 +184,7 @@ sub zbx  {
  my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
+# print STDERR ">>>>> ".$ConfigCopy{'flDebug'}."\n";
  print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
  $http_post->content($jsonrq);
  my $ans=$ua->request($http_post);
@@ -192,7 +193,7 @@ sub zbx  {
   return 0;
  }
  my $JSONAns=$ans->decoded_content;
- $JSONRaw=$JSONAns;  
+ $JSONRaw=$JSONAns;
  print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
  return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );

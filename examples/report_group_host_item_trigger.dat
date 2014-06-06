@@ -14,6 +14,25 @@ sub getHostIP {
  return $ip; 
 }
 
+my %MetoProd=('web.test'=>['HTTP','tcp:80'],
+              'mapi.test'=>['MAPI','rpc'],
+             );
+
+sub getMethod { 
+ my $T=shift;
+ my $method='';
+ my $groupName=$T->{'Group'}{'var'}{'name'};
+ my $item=$T->{'Item'}{'var'};  
+ if ($groupName=~m/Функции/) {
+  my $key=lc( ($item->{'key_'}=~m/^([^[]+)\[/)[0] );
+  ($method,$item->{'Protocol'})=@{$MetoProd{$key}} if defined($MetoProd{$key});
+ } elsif ($groupName=~m/Инфраструктура/) {
+  $method='zabbix';
+  $item->{'Protocol'}='zabbix';
+ }
+ return $method;
+}
+
 sub hasTriggers { 
  my $trgs=shift->{'Item'}{'var'}{'triggers'};
  return ((ref($trgs) eq 'ARRAY' && @{$trgs}) || $trgs>0 )?'Да':'Нет';
@@ -25,8 +44,8 @@ sub hasTriggers {
             'prefid'=>0,
            },
          'Host'=>
-           {'labels'=>['Хост', 'IP адрес'  , 'Протокол', 'Метод опроса'],
-              'keys'=>['name', \&getHostIP , 'protocol', 'method'      ],
+           {'labels'=>['Хост', 'IP адрес' ],
+              'keys'=>['name', \&getHostIP],
             'prefid'=>1,
            },
          'Application'=>
@@ -35,8 +54,8 @@ sub hasTriggers {
             'prefid'=>2,
            },
          'Item'=>
-           {'labels'=>['Параметр',      'Наличие триггера'],
-              'keys'=>['name_expanded', \&hasTriggers     ],
+           {'labels'=>['Параметр',      'Наличие триггера', 'Метод',     'Протокол опроса'],
+              'keys'=>['name_expanded', \&hasTriggers     , \&getMethod, 'Protocol'       ],
             'prefid'=>3,
            },
          'Trigger'=>
@@ -82,6 +101,7 @@ sub hasTriggers {
 		      'name'=>1,
                     },   
 	    'Item'=>{
+		      'key_'=>1,
 		      'name'=>1,
                     },
          'Trigger'=>{
@@ -97,7 +117,6 @@ my @tmp=('Best');
         'Host'=>{'available'=>sub { return $HostAvail[scalar(shift)] },
                  'status'=>sub { return scalar(shift)?'не выполняется':'выполняется' },
                  'error'=>\&cnvErr,
-                 'name'=>sub { return $tmp[0].' '.scalar(shift).' in the world!' },
                 },
         'Item'=>{'type'=>sub { return $ItemTypes[scalar(shift)] },
 		 'state'=>sub { return scalar(shift)?'не поддерживается':'поддерживается' },
