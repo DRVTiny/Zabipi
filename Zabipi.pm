@@ -46,8 +46,11 @@ sub new {
 }
 
 sub setErr {
- $ErrMsg{'text'}=join(' ',@_);
- print STDERR $ErrMsg{'text'}."\n" if $Config{'flDebug'};
+ my $err_msg=scalar(shift);
+ utf8::encode($err_msg);
+ die $err_msg if scalar(shift);
+ print STDERR $err_msg,"\n" if $Config{'flDebug'};
+ $ErrMsg{'text'}=$err_msg;
  return 1;
 }
 
@@ -198,12 +201,12 @@ sub zbx  {
  return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );
  if ($JSONAns->{'error'}) {
-  setErr 'Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'};
+  setErr('Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'},$ConfigCopy{'flDieOnError'});
   return 0;
  }
  my $rslt=$JSONAns->{'result'};
  unless ($rslt) {
-  setErr 'Cant get result in JSON response for unknown reason (no error was returned from Zabbix API)';
+  setErr 'Cant get result in JSON response for an unknown reason (no error was returned from Zabbix API)';
   return 0;
  }
  if ($what2do eq 'auth') {
