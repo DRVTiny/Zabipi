@@ -106,6 +106,7 @@ sub zbx  {
   return 0;
  }
  my %Cmd2APIMethod=('auth'=>'user.authenticate',
+                    'logout'=>'user.logout',
                     'searchHostByName'=>'host.get',
                     'searchUserByName'=>'user.get',
                     'createItem'=>'item.create',
@@ -151,6 +152,8 @@ sub zbx  {
    $req->{'id'}=0;
 #==</auth>==
 #==<searchHostByName>==
+  } elsif ($what2do eq 'logout') {
+   @{$req}{'auth','id','params'}=($Config{'authToken'},1,{});
   } elsif ($what2do eq 'searchHostByName') {
    my $hostName=shift;
    $req->{'params'}{'output'}='extend';
@@ -212,6 +215,8 @@ sub zbx  {
  if ($what2do eq 'auth') {
   print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
   $Config{'authToken'}=$rslt;
+ } elsif ($what2do eq 'logout') {
+  delete $Config{'authToken'};
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
   return $rslt->[0];
  } 
