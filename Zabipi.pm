@@ -6,7 +6,7 @@ use strict;
 use warnings;
 
 use Exporter qw(import);
-our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw);
+our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
@@ -18,7 +18,9 @@ my %Config=(
 
 my %ErrMsg;
 my $JSONRaw;
-
+my %cnfPar2cnfKey=('debug'=>'flDebug',
+                   'wildcards'=>'flSearchWildcardsEnabled',
+                  );
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
@@ -27,7 +29,9 @@ sub new {
  $Config{'apiUrl'}=$apiUrl;
  return 0 if defined($hlOtherPars) && ! (ref($hlOtherPars) eq 'HASH');
  if (defined($hlOtherPars)) {
-  $Config{'flDebug'}=(defined($hlOtherPars->{'debug'}) && $hlOtherPars->{'debug'}=~m/y(?:es)?|true|1/)?1:0;
+  foreach ( keys %cnfPar2cnfKey ) {
+   $Config{$cnfPar2cnfKey{$_}}=(defined($hlOtherPars->{$_}) && $hlOtherPars->{$_}=~m/y(?:es)?|true|1/i)?1:0;
+  }
   if (defined $hlOtherPars->{'debug_methods'}) {
    my $lstMethods2Dbg=$hlOtherPars->{'debug_methods'};
    if (! ref $lstMethods2Dbg) {
@@ -43,6 +47,10 @@ sub new {
   }
  }
  return 1;
+}
+
+sub zbx_api_url {
+ return $Config{'apiUrl'} || 0;
 }
 
 sub setErr {
@@ -166,7 +174,7 @@ sub zbx  {
 #==<getHostInterfaces>==
   } elsif ($what2do eq 'getHostInterfaces') {
    my $hostID=shift;
-   @{$req->{'params'}}{('output','hostids')}=('extend',$hostID);
+   @{$req->{'params'}}{'output','hostids'}=('extend',$hostID);
 #==</getHostInterfaces>==  
 #==<createUser>==
   } elsif ($what2do eq 'createUser') {
@@ -175,12 +183,12 @@ sub zbx  {
     setErr "Cant find group with name=$gid";
     return 0;
    }
-   @{$req->{'params'}}{('passwd','alias')}=($passwd,$uid);
+   @{$req->{'params'}}{'passwd','alias'}=($passwd,$uid);
 #==</createUser>==  
   }
  }
- @{$req}{('auth','id')}=($Config{'authToken'},1) if $Config{'authToken'};
- 
+ @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
+ $req->{'params'}{'searchWildcardsEnabled'}=1 if (ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
  # Redefine global config variables if it is needed
  my %ConfigCopy=%Config;
  my $confPars=shift;
