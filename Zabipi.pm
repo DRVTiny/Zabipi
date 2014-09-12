@@ -4,7 +4,7 @@ use utf8;
 #binmode(STDOUT, ":utf8");  
 use strict;
 use warnings;
-
+use Switch;
 use Exporter qw(import);
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
@@ -18,19 +18,43 @@ my %Config=(
 
 my %ErrMsg;
 my $JSONRaw;
-my %cnfPar2cnfKey=('debug'=>'flDebug',
-                   'wildcards'=>'flSearchWildcardsEnabled',
+my %cnfPar2cnfKey=('debug'=>{'type'=>'boolean','key'=>'flDebug'},
+                   'wildcards'=>{'type'=>'boolean','key'=>'flSearchWildcardsEnabled'},
+                   'timeout'=>{'type'=>'integer','key'=>'rqTimeout'},
                   );
+my %rx=(
+ 'boolean'=>'^(?:y(?:es)?|true|ok|1|no?|false|0)$',
+ 'integer'=>'^[-+]?[0-9]+$',
+ 'float'=>'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
+);
+
+sub new;
+sub setErr;
+sub zbx;
+sub zbx_api_url;
+sub zbx_last_err;
+sub zbx_json_raw;
+sub getDefaultMethodParams;
+sub doItemNameExpansion;
+
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
- return 0 if defined($hlOtherPars) && ! (ref($hlOtherPars) eq 'HASH');
  if (defined($hlOtherPars)) {
-  foreach ( keys %cnfPar2cnfKey ) {
-   $Config{$cnfPar2cnfKey{$_}}=(defined($hlOtherPars->{$_}) && $hlOtherPars->{$_}=~m/y(?:es)?|true|1/i)?1:0;
+  unless (ref($hlOtherPars) eq 'HASH') {
+   setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
+   return 0;
+  }
+  foreach my $cnfPar ( grep {defined $hlOtherPars->{$_}} keys %cnfPar2cnfKey ) {
+   my ($v,$t,$k)=($hlOtherPars->{$cnfPar},@{$cnfPar2cnfKey{$cnfPar}}{'type','key'});
+   unless ($v=~m/$rx{$t}/io) {
+    setErr('Wrong parameter passed to the "new" constructor: '.$cnfPar.' must be '.$t);
+    return 0
+   }
+   $Config{$k}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
   }
   if (defined $hlOtherPars->{'debug_methods'}) {
    my $lstMethods2Dbg=$hlOtherPars->{'debug_methods'};
@@ -106,7 +130,9 @@ sub zbx  {
  my $what2do=shift;
  my $req;
  my $ua = LWP::UserAgent->new;
- die "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n" unless $Config{'apiUrl'};
+
+ die "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n"
+  unless $Config{'apiUrl'};
 #==<auth>== 
  $req->{'jsonrpc'}='2.0';
  if ( !($what2do eq 'auth' || $Config{'authToken'}) ) {
@@ -189,18 +215,19 @@ sub zbx  {
  }
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
  $req->{'params'}{'searchWildcardsEnabled'}=1 if (ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
- # Redefine global config variables if it is needed
+ # Redefine global config variables if it is specified as a 3-rd parameter to zbx() ->
  my %ConfigCopy=%Config;
  my $confPars=shift;
  $ConfigCopy{'flDebug'}=$ConfigCopy{'lstDebugMethods'}{$what2do} if defined($ConfigCopy{'lstDebugMethods'});
  @ConfigCopy{keys %{$confPars}}=values %{$confPars} if ref($confPars) eq 'HASH';
- 
+ # <-
  my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
-# print STDERR ">>>>> ".$ConfigCopy{'flDebug'}."\n";
  print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
  $http_post->content($jsonrq);
+ $ua->timeout($ConfigCopy{'rqTimeout'}) if defined $ConfigCopy{'rqTimeout'};
+ $ua->show_progress(1) if $ConfigCopy{'flShowProgressBar'};
  my $ans=$ua->request($http_post);
  unless ( $ans->is_success ) {
   setErr 'HTTP POST request failed for some reason. Please double check, what you requested';
@@ -216,7 +243,7 @@ sub zbx  {
   return 0;
  }
  my $rslt=$JSONAns->{'result'};
- unless ($rslt) {
+ unless (ref($rslt) eq 'ARRAY'?scalar(@$rslt):defined($rslt)) {
   setErr 'Cant get result in JSON response for an unknown reason (no error was returned from Zabbix API)';
   return 0;
  }
