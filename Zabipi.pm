@@ -235,17 +235,25 @@ sub zbx  {
  }
  my $JSONAns=$ans->decoded_content;
  $JSONRaw=$JSONAns;
- print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n" if $ConfigCopy{'flDebug'};
- return $JSONAns if $ConfigCopy{'flRetRawJSON'};
+ print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n"
+  if $ConfigCopy{'flDebug'} and ! ($ConfigCopy{'flDbgResultAsListSize'} and (index($JSONAns,'"result":[')+1));
+ return $JSONAns if $ConfigCopy{'flRetRawJSON'}; 
  $JSONAns = decode_json( $JSONAns );
  if ($JSONAns->{'error'}) {
   setErr('Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'},$ConfigCopy{'flDieOnError'});
   return 0;
  }
  my $rslt=$JSONAns->{'result'};
+ if ( $ConfigCopy{'flDebug'} and $ConfigCopy{'flDbgResultAsListSize'} ) {
+  my $JSONAnsCopy;
+  my @k=grep {$_ ne 'result'} keys %$JSONAns;
+  @{$JSONAnsCopy}{@k}=@{$JSONAns}{@k};
+  $JSONAnsCopy->{'result'}='List; Size='.scalar(@$rslt);
+  print STDERR join("\n\t",'Decoded content from POST:',encode_json( $JSONAnsCopy ))."\n";
+ }
  unless (ref($rslt) eq 'ARRAY'?scalar(@$rslt):defined($rslt)) {
   setErr 'Cant get result in JSON response for an unknown reason (no error was returned from Zabbix API)';
-  return 0;
+  return ref($rslt) eq 'ARRAY'?[]:0;
  }
  if ($what2do eq 'auth') {
   print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
