@@ -10,6 +10,7 @@ our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
+use File::Temp;
 use JSON qw( decode_json encode_json );
 
 my %Config=(
@@ -18,6 +19,7 @@ my %Config=(
 
 my %ErrMsg;
 my $JSONRaw;
+my %SavedCreds;
 my %cnfPar2cnfKey=('debug'=>{'type'=>'boolean','key'=>'flDebug'},
                    'wildcards'=>{'type'=>'boolean','key'=>'flSearchWildcardsEnabled'},
                    'timeout'=>{'type'=>'integer','key'=>'rqTimeout'},
@@ -124,95 +126,104 @@ sub doItemNameExpansion {
  return 1;
 }
 
+my %Cmd2APIMethod=('auth'=>'user.authenticate',
+                   'logout'=>'user.logout',
+                   'searchHostByName'=>'host.get',
+                   'searchUserByName'=>'user.get',
+                   'createItem'=>'item.create',
+                   'getHostInterfaces'=>'hostinterface.get',
+                   'createUser'=>'user.create');
+my %MethodNeedWebLogin=(
+                   'queue.get'=>1,
+                   'graphimage.get'=>1,
+                       );
 # zbx internally doing some awful strange things such as:
 # POST $url {"jsonrpc": "2.0","method":"user.authenticate","params":{"user":"Admin","password":"zabbix"},"auth": null,"id":0}
 sub zbx  {
  my $what2do=shift;
- my $req;
+ my ($req,$flExpandNames,@UnsetKeysInResult);
  my $ua = LWP::UserAgent->new;
 
  die "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n"
   unless $Config{'apiUrl'};
-#==<auth>== 
- $req->{'jsonrpc'}='2.0';
  if ( !($what2do eq 'auth' || $Config{'authToken'}) ) {
-  setErr "You must be authorized first, use 'auth' before any other commands";
+  setErr "You must be authorized first, use 'auth' before any other operations";
   return 0;
  }
- my %Cmd2APIMethod=('auth'=>'user.authenticate',
-                    'logout'=>'user.logout',
-                    'searchHostByName'=>'host.get',
-                    'searchUserByName'=>'user.get',
-                    'createItem'=>'item.create',
-                    'getHostInterfaces'=>'hostinterface.get',
-                    'createUser'=>'user.create');
  my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
  unless ( $method ) {
-  setErr "Unknown action requested: $what2do";
+  setErr "Unknown operation requested: $what2do";
   return 0;
  }
- $req->{'params'}=getDefaultMethodParams($method);
- $req->{'method'}=$method;
- my $flExpandNames=undef;
- my @UnsetKeysInResult=();
-# Set common params
- if ( $what2do =~ m/^[a-z]+?\.[a-z]+$/) {
-  my $userParams=shift;
-  @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
-  if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
-   delete $req->{'params'}{'expandNames'};
-   $flExpandNames=1;
-   my $outcfg=$req->{'params'}{'output'};
-   unless ($outcfg eq 'extend') {
-    if (ref $outcfg eq 'ARRAY') {
-     foreach my $mandAttr ('name','key_') {
-      unless ( grep { $_ eq $mandAttr } @{$outcfg} ) {
-       push @{$outcfg},$mandAttr;
-       push @UnsetKeysInResult,$mandAttr;
+ if ( $MethodNeedWebLogin{$method} && ! $Config{'flWebLoginSuccess'} ) {
+  (undef,$SavedCreds{'cookie_file'})=tempfile('XXXXXXXX',TMPDIR => 1);
+  (my $ZabbixUrl=$Config{'apiUrl'})=~s%/[^/]+$%%;
+  my $cmdLogin='curl -s -c '.$SavedCreds{'cookie_file'}." -d 'request=&name=$SavedCreds{'login'}&password=$SavedCreds{'passwd'}&autologin=1&enter=Sign+in' $ZabbixUrl/index.php' 2>&1";
+  print STDERR 'Curl command to do Zabbix web login: '.$cmdLogin."\n";
+  unless (my $maybErr=`$cmdLogin`) {
+   setErr 'Method "'.$what2do.'" needs web login, but login failed because of web-authorization problem. Curl output follows: '."\n".$maybErr;
+   return 0
+  }
+  $Config{'flWebLoginSuccess'}=1
+ }
+# Set default params ->
+ @{$req}{'jsonrpc','params','method'}=('2.0',getDefaultMethodParams($method),$method);
+# <- Set default params
+ switch ($what2do) {
+  case qr/^[a-z]+?\.[a-z]+$/ {
+   my $userParams=shift;
+   @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
+   if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
+    delete $req->{'params'}{'expandNames'};
+    $flExpandNames=1;
+    my $outcfg=$req->{'params'}{'output'};
+    unless ($outcfg eq 'extend') {
+     if (ref $outcfg eq 'ARRAY') {
+      foreach my $mandAttr ('name','key_') {
+       unless ( grep { $_ eq $mandAttr } @{$outcfg} ) {
+        push @{$outcfg},$mandAttr;
+        push @UnsetKeysInResult,$mandAttr;
+       }
       }
+     } else {
+      $req->{'params'}{'output'}='extend';
      }
-    } else {
-     $req->{'params'}{'output'}='extend';
     }
    }
-  }
- } else {
-  if ($what2do eq 'auth') {
+  };
+  case 'auth' {
    if (!(@_ == 2 or @_ == 3)) {
     setErr 'You must specify (only) login and password for auth';
-    return 0;
+    return 0
    }
-   $req->{'params'}={'user'=>shift,'password'=>shift};
+   @SavedCreds{'login','passwd'}=(shift,shift);
+   $req->{'params'}={'user'=>$SavedCreds{'login'},'password'=>$SavedCreds{'passwd'}};
    $req->{'id'}=0;
-#==</auth>==
-#==<searchHostByName>==
-  } elsif ($what2do eq 'logout') {
+  }; # <- auth
+  case 'logout' {
    @{$req}{'auth','id','params'}=($Config{'authToken'},1,{});
-  } elsif ($what2do eq 'searchHostByName') {
+  }; # <- logout
+  case 'searchHostByName' {
    my $hostName=shift;
    $req->{'params'}{'output'}='extend';
    $req->{'params'}{'filter'}={'host'=>[$hostName]};
-#==</searchHostByName>==
-#==<searchUserByName>==
-  } elsif ($what2do eq 'searchUserByName') {
+  }; # <- searchHostByName
+  case 'searchUserByName' {
    $req->{'params'}{'filter'}={'alias'=>shift};
-#==</searchUserByName>==     
-#==<getHostInterfaces>==
-  } elsif ($what2do eq 'getHostInterfaces') {
+  }; # <- searchUserByName
+  case 'getHostInterfaces' {
    my $hostID=shift;
    @{$req->{'params'}}{'output','hostids'}=('extend',$hostID);
-#==</getHostInterfaces>==  
-#==<createUser>==
-  } elsif ($what2do eq 'createUser') {
+  }; # <- getHostInterfaces
+  case 'createUser' {
    my ($uid,$gid,$passwd)=@_; 
    if (!( $req->{'params'}{'usrgrps'}=[ zbx('searchGroup',{'status'=>0,'filter'=>{'name'=>$gid}})->[0] ] )) {
     setErr "Cant find group with name=$gid";
     return 0;
    }
    @{$req->{'params'}}{'passwd','alias'}=($passwd,$uid);
-#==</createUser>==  
-  }
- }
+  }; # <- createUser
+ } # <- switch ($what2do)
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
  $req->{'params'}{'searchWildcardsEnabled'}=1 if (ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
  # Redefine global config variables if it is specified as a 3-rd parameter to zbx() ->
