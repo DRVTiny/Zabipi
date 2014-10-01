@@ -7,11 +7,12 @@ use warnings;
 use Switch;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
+use Data::Dumper qw(Dumper);
+
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
-use File::Temp;
 use JSON qw( decode_json encode_json );
 
 my %Config=(
@@ -192,14 +193,13 @@ sub queue_get {
   my @qitem=/<td>(.+?)<\/td>/g; 
   my @delay=$qitem[1]=~m/([0-9]+)/g;
   my ($hostName,$itemName)=@qitem[2,3];
-  
   {
     'time_expect'=>str2time($qitem[0]),
     'time_delay'=>$delay[0]*3600*24+$delay[1]*3600+$delay[2]*60,
     'hosts'=>$selectHosts?($N2H{$hostName}||=zbx('host.get',{'search'=>{'host'=>$hostName},'searchWildcardsEnabled'=>0,'output'=>$selectHosts})):[{'host'=>$hostName}],
     'items'=>$selectItems?($N2HI{$hostName}{$itemName}||=zbx('item.get',{'hostids'=>$N2H{$hostName}[0]{'hostid'},'search'=>{'name'=>$itemName},'searchWildcardsEnabled'=>0,'output'=>$selectItems})):[{'name'=>$itemName}],
   }
- } @queue ];
+ } @queue ]
 } # <- sub queue_get
 
 # zbx internally doing some nasty things such as:
