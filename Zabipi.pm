@@ -5,6 +5,7 @@ use utf8;
 use strict;
 use warnings;
 use Switch;
+use Date::Parse qw(str2time);
 use Exporter qw(import);
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
@@ -38,6 +39,10 @@ sub zbx_last_err;
 sub zbx_json_raw;
 sub getDefaultMethodParams;
 sub doItemNameExpansion;
+sub http_;
+sub queue_get;
+
+my %UserAgent;
 
 sub new {
  return 0 unless @_;
@@ -45,6 +50,7 @@ sub new {
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
+
  if (defined($hlOtherPars)) {
   unless (ref($hlOtherPars) eq 'HASH') {
    setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
@@ -70,8 +76,13 @@ sub new {
     print STDERR 'ERROR: List of the methods to debug may be: hashref, arrayref, string';
     return 0;
    }
-  }
+  }  
  }
+ ($UserAgent{'baseUrl'}=$apiUrl)=~s%/[^/]+$%%;
+ my $ua = LWP::UserAgent->new;
+ $ua->cookie_jar({'autosave'=>1});
+ $ua->show_progress($Config{'flDebug'}?1:0);
+ $UserAgent{'reqObj'}=$ua; 
  return 1;
 }
 
@@ -132,20 +143,73 @@ my %Cmd2APIMethod=('auth'=>'user.authenticate',
                    'searchUserByName'=>'user.get',
                    'createItem'=>'item.create',
                    'getHostInterfaces'=>'hostinterface.get',
-                   'createUser'=>'user.create');
-my %MethodNeedWebLogin=(
-                   'queue.get'=>1,
-                   'graphimage.get'=>1,
+                   'createUser'=>'user.create',
+                   'getQueue'=>'queue.get',
+                  );
+my %WebMethod=(
+                   'queue.get'=>\&queue_get,
+                   'graphimage.get'=>sub { return 1 },
                        );
-# zbx internally doing some awful strange things such as:
+                       
+sub http_ {
+ my ($method,$relUrl,$pars)=(lc(shift),shift); 
+ do { setErr 'Unknown/unsupported HTTP method requested: '.$method; return 0 } unless $method eq 'get' or $method eq 'post';
+ my $ua=$UserAgent{'reqObj'};
+ do { setErr 'UserAgent not initialized'; return 0 } unless ref($ua) eq 'LWP::UserAgent';
+ do { setErr 'UserAgent baseUrl property not set'; return 0 } unless $UserAgent{'baseUrl'};
+ my $url=join(scalar(substr($relUrl,0,1) eq '/'?'':'/'),$UserAgent{'baseUrl'},$relUrl);
+ my $ans=$method eq 'get'?$ua->get($url):$ua->post($url,ref($pars) eq 'HASH'?$pars:());
+ do { print STDERR 'Error in HTTP response: '.$ans->status_line; return 0 } unless $ans->is_success;
+ return $ans->decoded_content;
+} #  <- sub http_
+
+sub web_logout {
+ http_ 'GET','/index.php?reconnect=1&sid='.$UserAgent{'SessionID'} if $UserAgent{'SessionID'};
+ return 0
+} # <- sub web_logout
+
+sub queue_get {
+ my $pars=shift;
+
+ return [] unless my $html=http_('GET','queue.php?sid='.$UserAgent{'SessionID'}.'&form_refresh=1&config=2');
+ $html=~s%^.*<td>Name</td></tr>(<tr class="even_row".*?)</table>.*$%$1%s;
+ my @queue=split /<tr class="(?:even|odd)_row".*?>/,$html;
+ shift @queue;
+# @QUEUE_ROW=('time_expected','time_delay','host','item_name');
+ my ($selectHosts,$selectItems);
+ if (ref($pars) eq 'HASH') {
+  ($selectHosts,$selectItems)=@{$pars}{'selectHosts','selectItems'};
+  if ($selectHosts) {
+   $selectHosts=['hostid','host'] unless (ref($selectHosts) eq 'ARRAY') and scalar(@$selectHosts);
+  }
+  if ($selectItems) {
+   $selectItems=['itemid','name'] unless (ref($selectItems) eq 'ARRAY') and scalar(@$selectItems);
+   $selectHosts=['hostid'] unless $selectHosts;
+  }
+ }
+ my (%N2H,%N2HI);
+ return [ map {
+  my @qitem=/<td>(.+?)<\/td>/g; 
+  my @delay=$qitem[1]=~m/([0-9]+)/g;
+  my ($hostName,$itemName)=@qitem[2,3];
+  
+  {
+    'time_expect'=>str2time($qitem[0]),
+    'time_delay'=>$delay[0]*3600*24+$delay[1]*3600+$delay[2]*60,
+    'hosts'=>$selectHosts?($N2H{$hostName}||=zbx('host.get',{'search'=>{'host'=>$hostName},'searchWildcardsEnabled'=>0,'output'=>$selectHosts})):[{'host'=>$hostName}],
+    'items'=>$selectItems?($N2HI{$hostName}{$itemName}||=zbx('item.get',{'hostids'=>$N2H{$hostName}[0]{'hostid'},'search'=>{'name'=>$itemName},'searchWildcardsEnabled'=>0,'output'=>$selectItems})):[{'name'=>$itemName}],
+  }
+ } @queue ];
+} # <- sub queue_get
+
+# zbx internally doing some nasty things such as:
 # POST $url {"jsonrpc": "2.0","method":"user.authenticate","params":{"user":"Admin","password":"zabbix"},"auth": null,"id":0}
 sub zbx  {
  my $what2do=shift;
  my ($req,$flExpandNames,@UnsetKeysInResult);
- my $ua = LWP::UserAgent->new;
-
+ my $ua=$UserAgent{'reqObj'};
  die "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n"
-  unless $Config{'apiUrl'};
+  unless $Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent';
  if ( !($what2do eq 'auth' || $Config{'authToken'}) ) {
   setErr "You must be authorized first, use 'auth' before any other operations";
   return 0;
@@ -155,16 +219,14 @@ sub zbx  {
   setErr "Unknown operation requested: $what2do";
   return 0;
  }
- if ( $MethodNeedWebLogin{$method} && ! $Config{'flWebLoginSuccess'} ) {
-  (undef,$SavedCreds{'cookie_file'})=tempfile('XXXXXXXX',TMPDIR => 1);
-  (my $ZabbixUrl=$Config{'apiUrl'})=~s%/[^/]+$%%;
-  my $cmdLogin='curl -s -c '.$SavedCreds{'cookie_file'}." -d 'request=&name=$SavedCreds{'login'}&password=$SavedCreds{'passwd'}&autologin=1&enter=Sign+in' $ZabbixUrl/index.php' 2>&1";
-  print STDERR 'Curl command to do Zabbix web login: '.$cmdLogin."\n";
-  unless (my $maybErr=`$cmdLogin`) {
-   setErr 'Method "'.$what2do.'" needs web login, but login failed because of web-authorization problem. Curl output follows: '."\n".$maybErr;
-   return 0
+ if ( $WebMethod{$method} ) {
+  unless ($Config{'flWebLoginSuccess'}) {
+   return 0 unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$SavedCreds{'passwd'}.'&autologin=1&enter=Sign+in');
+   do { setErr 'Cant get Zabbix Web Session ID'; return 0 }
+    unless ($UserAgent{'SessionID'})=$html=~m/name="sid" value="([0-9a-f]+)"/;   
+   $Config{'flWebLoginSuccess'}=1;
   }
-  $Config{'flWebLoginSuccess'}=1
+  return &{$WebMethod{$method}}(@_);
  }
 # Set default params ->
  @{$req}{'jsonrpc','params','method'}=('2.0',getDefaultMethodParams($method),$method);
@@ -199,10 +261,13 @@ sub zbx  {
    @SavedCreds{'login','passwd'}=(shift,shift);
    $req->{'params'}={'user'=>$SavedCreds{'login'},'password'=>$SavedCreds{'passwd'}};
    $req->{'id'}=0;
-  }; # <- auth
+  }; # <- auth  
   case 'logout' {
    @{$req}{'auth','id','params'}=($Config{'authToken'},1,{});
   }; # <- logout
+  case 'queue.get' {
+   return queue_get();
+  };
   case 'searchHostByName' {
    my $hostName=shift;
    $req->{'params'}{'output'}='extend';
@@ -232,7 +297,8 @@ sub zbx  {
  $ConfigCopy{'flDebug'}=$ConfigCopy{'lstDebugMethods'}{$what2do} if defined($ConfigCopy{'lstDebugMethods'});
  @ConfigCopy{keys %{$confPars}}=values %{$confPars} if ref($confPars) eq 'HASH';
  # <-
- my $http_post = HTTP::Request->new(POST => $ConfigCopy{'apiUrl'});
+ # You dont have possibility to freely redefine apiUrl on every zbx() call
+ my $http_post = HTTP::Request->new(POST => $Config{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
  print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
@@ -271,6 +337,7 @@ sub zbx  {
   $Config{'authToken'}=$rslt;
  } elsif ($what2do eq 'logout') {
   delete $Config{'authToken'};
+  web_logout if $Config{'flWebLoginSuccess'};
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
   return $rslt->[0];
  } 
