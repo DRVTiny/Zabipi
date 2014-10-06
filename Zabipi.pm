@@ -1,7 +1,14 @@
 #!/usr/bin/perl
+#
+# Monitoring::Zabipi is a simple, robust and clever way to access Zabbix API within Perl
+# (C) DRVTiny (Andrey Konovalov), 2014
+# EMail: drvtiny // GMail
+# This software is licensed under GPL v3
+#
 package Monitoring::Zabipi;
+use v5.10.1;
 use utf8;
-#binmode(STDOUT, ":utf8");  
+#binmode(STDOUT, ":utf8");
 use strict;
 use warnings;
 use Switch;
@@ -231,8 +238,8 @@ sub zbx  {
 # Set default params ->
  @{$req}{'jsonrpc','params','method'}=('2.0',getDefaultMethodParams($method),$method);
 # <- Set default params
- switch ($what2do) {
-  case qr/^[a-z]+?\.[a-z]+$/ {
+ given ($what2do) {
+  when (/^[a-z]+?\.[a-z]+$/) {
    my $userParams=shift;
    @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
    if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
@@ -253,7 +260,7 @@ sub zbx  {
     }
    }
   };
-  case 'auth' {
+  when ('auth') {
    if (!(@_ == 2 or @_ == 3)) {
     setErr 'You must specify (only) login and password for auth';
     return 0
@@ -262,25 +269,25 @@ sub zbx  {
    $req->{'params'}={'user'=>$SavedCreds{'login'},'password'=>$SavedCreds{'passwd'}};
    $req->{'id'}=0;
   }; # <- auth  
-  case 'logout' {
+  when ('logout') {
    @{$req}{'auth','id','params'}=($Config{'authToken'},1,{});
   }; # <- logout
-  case 'queue.get' {
+  when ('queue.get') {
    return queue_get();
   };
-  case 'searchHostByName' {
+  when ('searchHostByName') {
    my $hostName=shift;
    $req->{'params'}{'output'}='extend';
    $req->{'params'}{'filter'}={'host'=>[$hostName]};
   }; # <- searchHostByName
-  case 'searchUserByName' {
+  when ('searchUserByName') {
    $req->{'params'}{'filter'}={'alias'=>shift};
   }; # <- searchUserByName
-  case 'getHostInterfaces' {
+  when ('getHostInterfaces') {
    my $hostID=shift;
    @{$req->{'params'}}{'output','hostids'}=('extend',$hostID);
   }; # <- getHostInterfaces
-  case 'createUser' {
+  when ('createUser') {
    my ($uid,$gid,$passwd)=@_; 
    if (!( $req->{'params'}{'usrgrps'}=[ zbx('searchGroup',{'status'=>0,'filter'=>{'name'=>$gid}})->[0] ] )) {
     setErr "Cant find group with name=$gid";
@@ -288,7 +295,9 @@ sub zbx  {
    }
    @{$req->{'params'}}{'passwd','alias'}=($passwd,$uid);
   }; # <- createUser
- } # <- switch ($what2do)
+  default { setErr 'Command '.$what2do.' is unsupported (yet). Please make request to maintainer to add this feature';
+            return 0 }
+ } # <- given ($what2do)
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
  $req->{'params'}{'searchWildcardsEnabled'}=1 if (ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
  # Redefine global config variables if it is specified as a 3-rd parameter to zbx() ->
