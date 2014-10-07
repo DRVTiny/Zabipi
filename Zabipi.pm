@@ -11,7 +11,6 @@ use utf8;
 #binmode(STDOUT, ":utf8");
 use strict;
 use warnings;
-use Switch;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
 use Data::Dumper qw(Dumper);
@@ -241,7 +240,11 @@ sub zbx  {
  given ($what2do) {
   when (/^[a-z]+?\.[a-z]+$/) {
    my $userParams=shift;
-   @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams} if ref($userParams) eq 'HASH';
+   if ( ref($userParams) eq 'HASH' ) {
+    @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams};
+   } else {
+    $req->{'params'}=$userParams;
+   }
    if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
     delete $req->{'params'}{'expandNames'};
     $flExpandNames=1;
@@ -299,7 +302,12 @@ sub zbx  {
             return 0 }
  } # <- given ($what2do)
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
- $req->{'params'}{'searchWildcardsEnabled'}=1 if (ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
+ my $pars=$req->{'params'};
+ if ($method=~m/\.(?:delete|update)/ and ! ((ref($pars) eq 'ARRAY' and scalar(@$pars)) or (ref($pars) eq 'HASH' and %$pars))) {
+  setErr 'Cant execute "delete" or "update" without parameters';
+  return 0;
+ }
+ $req->{'params'}{'searchWildcardsEnabled'}=1 if ($method=~m/\.get$/ && ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
  # Redefine global config variables if it is specified as a 3-rd parameter to zbx() ->
  my %ConfigCopy=%Config;
  my $confPars=shift;
@@ -311,6 +319,7 @@ sub zbx  {
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
  print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
+ return [] if $ConfigCopy{'flDryRun'};
  $http_post->content($jsonrq);
  $ua->timeout($ConfigCopy{'rqTimeout'}) if defined $ConfigCopy{'rqTimeout'};
  $ua->show_progress(1) if $ConfigCopy{'flShowProgressBar'};
