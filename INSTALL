@@ -1,0 +1,34 @@
+** Dependencies **
+Monitoring::Zabipi has the following dependencies:
+1) Date::Parse
+Reason: used by queue.get native method
+2) LWP::UserAgent
+Reason: used to make POST requests to the Zabbix frontend
+3) JSON
+Reason: Used to assemble JSON-strings from Perl datastructures when making requests and to decompile JSON strings, received from the Zabbix frontend, to Perl datastructures
+
+** Installation **
+You have two different choices where to place Zabipi,pm
+1) Make directory Monitoring in some "unusual" place
+In this case you must add the directory in which you create the "Monitoring" subfolder to the @INC global array.
+Doing so in your program simple as push @INC,$dir or unshift @INC,$dir ath the BEGIN block.
+Refer to the Perl documentation to know how to do it globally.
+2) Make directory Monitoring in the one of the directories, which already present in the @INC global array.
+To view the contents of the @INC array, you may use this command:
+perl -e 'print "  \@INC:\n\t".join("\n\t",@INC)."\n"'
+or simple type perl -V (Look at the newline-separated list of directories right after "@INC:")
+
+Than copy Zabipi.pm to the created/already existing Monitoring folder.
+
+So if you prefer to not drop Monitoring::Zabipi to the one of your system pathes, you may use this code snippet:
+---
+BEGIN {
+ unshift @INC, '/MONITORING/FOLDER/PATH';
+}
+
+use Monitoring::Zabipi qw(zbx zbx_last_err);
+---
+
+
+
+
