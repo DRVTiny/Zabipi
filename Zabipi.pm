@@ -13,7 +13,7 @@ use strict;
 use warnings;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
-use Data::Dumper qw(Dumper);
+#use Data::Dumper qw(Dumper);
 
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
 
@@ -348,7 +348,8 @@ sub zbx  {
  }
  unless (ref($rslt) eq 'ARRAY'?scalar(@$rslt):defined($rslt)) {
   setErr 'Cant get result in JSON response for an unknown reason (no error was returned from Zabbix API)';
-  return ref($rslt) eq 'ARRAY'?[]:0;
+  die 'Empty result set was returned from the Zabbix API' if $ConfigCopy{'flDieIfEmpty'};
+  return (ref($rslt) eq 'ARRAY' and !$ConfigCopy{'flRetFalseIfEmpty'})?[]:0;
  }
  if ($what2do eq 'auth') {
   print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
