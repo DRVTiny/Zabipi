@@ -104,7 +104,7 @@ sub new {
 # Try to get API version
  my $http_post = HTTP::Request->new('POST' => $apiUrl);
  $http_post->header('content-type' => 'application/json');
- $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":1}');
+ $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":0}');
  my $r=$ua->request($http_post);
  unless ( $r->is_success ) {
   setErr('Cant get API version info: Zabbix API seems to be  configured incorrectly');
@@ -236,14 +236,16 @@ sub zbx  {
   print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";
   return 0
  }
- if ( !($what2do=~m/(?:auth|user\.(?:login|authenticate)|apiinfo\.version|getVersion)/ || $Config{'authToken'}) ) {
+ my $flGetVersion=$what2do=~m/apiinfo\.version|getVersion/?1:0;
+ my $flDoAuth=$what2do=~m/(?:auth|user\.(?:login|authenticate))/?1:0;
+ if ( !($flGetVersion or $flDoAuth or $Config{'authToken'}) ) {
   setErr "You must be authorized first. Use 'auth' before '$what2do'";
-  return 0;
+  return 0
  }
  my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
  unless ( $method ) {
   setErr "Unknown operation requested: $what2do";
-  return 0;
+  return 0
  }
  if ( $WebMethod{$method} ) {
   unless ($Config{'flWebLoginSuccess'}) {
@@ -255,7 +257,7 @@ sub zbx  {
   return &{$WebMethod{$method}}(@_);
  }
 # Set default params ->
- @{$req}{'jsonrpc','params','method'}=('2.0',getDefaultMethodParams($method),$method);
+ @{$req}{'jsonrpc','params','method','id'}=('2.0',getDefaultMethodParams($method),$method,0);
 # <- Set default params
  given ($what2do) {
   when (/^[a-z]+?\.[a-z]+$/) {
@@ -311,17 +313,21 @@ sub zbx  {
    @{$req->{'params'}}{'output','hostids'}=('extend',$hostID);
   }; # <- getHostInterfaces
   when ('createUser') {
-   my ($uid,$gid,$passwd)=@_; 
+   my ($uid,$gid,$passwd)=(shift,shift,shift);
    if (!( $req->{'params'}{'usrgrps'}=[ zbx('searchGroup',{'status'=>0,'filter'=>{'name'=>$gid}})->[0] ] )) {
     setErr "Cant find group with name=$gid";
     return 0;
    }
    @{$req->{'params'}}{'passwd','alias'}=($passwd,$uid);
   }; # <- createUser
+  when ('getVersion') {
+   $req->{'params'}=[];
+   shift while defined($_[0]) and ref $_[0] ne 'HASH';
+  };
   default { setErr 'Command '.$what2do.' is unsupported (yet). Please make request to maintainer to add this feature';
             return 0 }
  } # <- given ($what2do)
- @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'};
+ @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'} and ! $flGetVersion;
  my $pars=$req->{'params'};
  if ($method=~m/\.(?:delete|update)/ and ! ((ref($pars) eq 'ARRAY' and scalar(@$pars)) or (ref($pars) eq 'HASH' and %$pars))) {
   setErr 'Cant execute "delete" or "update" without parameters';
