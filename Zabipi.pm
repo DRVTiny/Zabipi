@@ -15,7 +15,7 @@ use Date::Parse qw(str2time);
 use Exporter qw(import);
 #use Data::Dumper qw(Dumper);
 
-our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url);
+our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
 
 use constant DEFAULT_ITEM_DELAY=>30;
 use LWP::UserAgent;
@@ -42,6 +42,7 @@ sub new;
 sub setErr;
 sub zbx;
 sub zbx_api_url;
+sub zbx_api_version;
 sub zbx_last_err;
 sub zbx_json_raw;
 sub getDefaultMethodParams;
@@ -50,13 +51,23 @@ sub http_;
 sub queue_get;
 
 my %UserAgent;
-
+my %Cmd2APIMethod=('auth'=>'user.authenticate',
+                   'getVersion'=>'apiinfo.version',
+                   'logout'=>'user.logout',
+                   'searchHostByName'=>'host.get',
+                   'searchUserByName'=>'user.get',
+                   'createItem'=>'item.create',
+                   'getHostInterfaces'=>'hostinterface.get',
+                   'createUser'=>'user.create',
+                   'getQueue'=>'queue.get',
+                  );
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
+
 
  if (defined($hlOtherPars)) {
   unless (ref($hlOtherPars) eq 'HASH') {
@@ -90,11 +101,26 @@ sub new {
  $ua->cookie_jar({'autosave'=>1});
  $ua->show_progress($Config{'flDebug'}?1:0);
  $UserAgent{'reqObj'}=$ua; 
+# Try to get API version
+ my $http_post = HTTP::Request->new('POST' => $apiUrl);
+ $http_post->header('content-type' => 'application/json');
+ $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":1}');
+ my $r=$ua->request($http_post);
+ unless ( $r->is_success ) {
+  setErr('Cant get API version info: Zabbix API seems to be  configured incorrectly');
+  return 0
+ }
+ $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
+ $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
  return 1;
 }
 
 sub zbx_api_url {
- return $Config{'apiUrl'} || 0;
+ return $Config{'apiUrl'} || undef;
+}
+
+sub zbx_api_version {
+ return $Config{'apiVersion'} || undef;
 }
 
 sub setErr {
@@ -144,15 +170,7 @@ sub doItemNameExpansion {
  return 1;
 }
 
-my %Cmd2APIMethod=('auth'=>'user.authenticate',
-                   'logout'=>'user.logout',
-                   'searchHostByName'=>'host.get',
-                   'searchUserByName'=>'user.get',
-                   'createItem'=>'item.create',
-                   'getHostInterfaces'=>'hostinterface.get',
-                   'createUser'=>'user.create',
-                   'getQueue'=>'queue.get',
-                  );
+
 my %WebMethod=(
                    'queue.get'=>\&queue_get,
                    'graphimage.get'=>sub { return 1 },
@@ -214,10 +232,12 @@ sub zbx  {
  my $what2do=shift;
  my ($req,$flExpandNames,@UnsetKeysInResult);
  my $ua=$UserAgent{'reqObj'};
- die "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n"
-  unless $Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent';
- if ( !($what2do eq 'auth' || $Config{'authToken'}) ) {
-  setErr "You must be authorized first, use 'auth' before any other operations";
+ unless ($Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent') {
+  print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";
+  return 0
+ }
+ if ( !($what2do=~m/(?:auth|user\.(?:login|authenticate)|apiinfo\.version|getVersion)/ || $Config{'authToken'}) ) {
+  setErr "You must be authorized first. Use 'auth' before '$what2do'";
   return 0;
  }
  my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
@@ -315,7 +335,7 @@ sub zbx  {
  @ConfigCopy{keys %{$confPars}}=values %{$confPars} if ref($confPars) eq 'HASH';
  # <-
  # You dont have possibility to freely redefine apiUrl on every zbx() call
- my $http_post = HTTP::Request->new(POST => $Config{'apiUrl'});
+ my $http_post = HTTP::Request->new('POST' => $Config{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
  my $jsonrq=encode_json($req);
  print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
