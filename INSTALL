@@ -6,6 +6,8 @@ Reason: used by queue.get native method
 Reason: used to make POST requests to the Zabbix frontend
 3) JSON
 Reason: Used to assemble JSON-strings from Perl datastructures when making requests and to decompile JSON strings, received from the Zabbix frontend, to Perl datastructures
+4) JSON::XS
+Reason: JSON pretty printing in debug mode (see flPrettyJSON flag description)
 
 ** Installation **
 You have two different choices where to place Zabipi.pm
