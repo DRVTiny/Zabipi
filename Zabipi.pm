@@ -13,6 +13,7 @@ use strict;
 use warnings;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
+use JSON::XS;
 #use Data::Dumper qw(Dumper);
 
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
@@ -113,6 +114,16 @@ sub new {
  $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
  $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
  return 1;
+}
+
+sub to_json_str {
+ my ($cfg,$plStruct)=@_;
+ return 0 unless defined $plStruct and ref($plStruct)=~m/^(?:ARRAY|HASH)?$/;
+ if (ref $plStruct) {
+  return $cfg->{'flPrettyJSON'}?JSON::XS->new->utf8->pretty(1)->encode($plStruct):encode_json($plStruct);
+ } else {
+  return $cfg->{'flPrettyJSON'}?JSON::XS->new->utf8->pretty(1)->encode(decode_json($plStruct)):$plStruct;
+ }
 }
 
 sub zbx_api_url {
@@ -356,10 +367,10 @@ sub zbx  {
  }
  my $JSONAns=$ans->decoded_content;
  $JSONRaw=$JSONAns;
- print STDERR "Decoded content from POST:\n\t". $JSONAns . "\n"
-  if $ConfigCopy{'flDebug'} and ! ($ConfigCopy{'flDbgResultAsListSize'} and (index($JSONAns,'"result":[')+1));
- return $JSONAns if $ConfigCopy{'flRetRawJSON'}; 
+ return $JSONAns if $ConfigCopy{'flRetRawJSON'};
  $JSONAns = decode_json( $JSONAns );
+ print STDERR join("\n",'Decoded content from POST:',to_json_str(\%ConfigCopy,$JSONAns),'')
+  if $ConfigCopy{'flDebug'} and ! ($ConfigCopy{'flDbgResultAsListSize'} and (index($JSONAns,'"result":[')+1)); 
  if ($JSONAns->{'error'}) {
   setErr('Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'},$ConfigCopy{'flDieOnError'});
   return 0;
@@ -370,7 +381,7 @@ sub zbx  {
   my @k=grep {$_ ne 'result'} keys %$JSONAns;
   @{$JSONAnsCopy}{@k}=@{$JSONAns}{@k};
   $JSONAnsCopy->{'result'}='List; Size='.scalar(@$rslt);
-  print STDERR join("\n\t",'Decoded content from POST:',encode_json( $JSONAnsCopy ))."\n";
+  print STDERR join("\n",'Decoded content from POST:',to_json_str(\%ConfigCopy,$JSONAnsCopy),'');
  }
  unless (ref($rslt) eq 'ARRAY'?scalar(@$rslt):defined($rslt)) {
   setErr 'Cant get result in JSON response for an unknown reason (no error was returned from Zabbix API)';
