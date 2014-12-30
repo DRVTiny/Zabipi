@@ -11,16 +11,17 @@ use utf8;
 #binmode(STDOUT, ":utf8");
 use strict;
 use warnings;
+use DBI;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
+use JSON qw( decode_json encode_json );
 use JSON::XS;
+use LWP::UserAgent;
 #use Data::Dumper qw(Dumper);
 
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
 
 use constant DEFAULT_ITEM_DELAY=>30;
-use LWP::UserAgent;
-use JSON qw( decode_json encode_json );
 
 my %Config=(
   'default_params'=>{'item.create'=>{'delay'=>DEFAULT_ITEM_DELAY}}
@@ -32,11 +33,17 @@ my %SavedCreds;
 my %cnfPar2cnfKey=('debug'=>{'type'=>'boolean','key'=>'flDebug'},
                    'wildcards'=>{'type'=>'boolean','key'=>'flSearchWildcardsEnabled'},
                    'timeout'=>{'type'=>'integer','key'=>'rqTimeout'},
+                   'dbDSN'=>{'type'=>'dsnString','key'=>'DBI.dsn'},
+                   'dbLogin'=>{'type'=>'notEmptyString','key'=>'DBI.login'},
+                   'dbPass'=>{'type'=>'anyString','key'=>'DBI.pass'},
                   );
 my %rx=(
  'boolean'=>'^(?:y(?:es)?|true|ok|1|no?|false|0)$',
  'integer'=>'^[-+]?[0-9]+$',
  'float'=>'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
+ 'dsnString'=>'^dbi:(?:[^:]*:)+(?:;[^=;]+=[^=;]+)*$',
+ 'notEmptyString'=>'^.+$',
+ 'anyString'=>'^.*$', 
 );
 
 sub new;
@@ -50,6 +57,8 @@ sub getDefaultMethodParams;
 sub doItemNameExpansion;
 sub http_;
 sub queue_get;
+sub check_dbi;
+sub fillHashInd;
 
 my %UserAgent;
 my %Cmd2APIMethod=('auth'=>'user.authenticate',
@@ -61,15 +70,14 @@ my %Cmd2APIMethod=('auth'=>'user.authenticate',
                    'getHostInterfaces'=>'hostinterface.get',
                    'createUser'=>'user.create',
                    'getQueue'=>'queue.get',
-                  );
+                  );                 
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  $Config{'apiUrl'}=$apiUrl;
-
-
+ $Config{'authToken'}='';
  if (defined($hlOtherPars)) {
   unless (ref($hlOtherPars) eq 'HASH') {
    setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
@@ -81,7 +89,7 @@ sub new {
     setErr('Wrong parameter passed to the "new" constructor: '.$cnfPar.' must be '.$t);
     return 0
    }
-   $Config{$k}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
+   ${&fillHashInd(\%Config,split /\./,$k)}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
   }
   if (defined $hlOtherPars->{'debug_methods'}) {
    my $lstMethods2Dbg=$hlOtherPars->{'debug_methods'};
@@ -113,7 +121,18 @@ sub new {
  }
  $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
  $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
+# print Dumper(\%Config);
  return 1;
+}
+
+sub fillHashInd {
+ my ($d,@i)=@_;
+ if (@i==1) {
+  return \$d->{$i[0]}
+ } else {
+  my $e=shift @i;
+  fillHashInd($d->{$e}=$d->{$e} || {},@i)
+ }
 }
 
 sub to_json_str {
@@ -237,11 +256,79 @@ sub queue_get {
  } @queue ]
 } # <- sub queue_get
 
+sub check_dbi {
+ return 1 if ref($Config{'DBI'}) eq 'HASH' and scalar(grep {defined($_)} @{$Config{'DBI'}}{'dsn','login','pass'}) == 3;
+ setErr 'Insufficient database connection properties given, but method or its parameter requires direct database connection';
+ 0;
+}
+
+my %APIPatcher=(
+ 'usergroup.get'=>{
+   'before'=>sub {
+     my ($rq,$flags)=@_;
+     return 1 unless $rq->{'params'}{'selectRights'};
+     return 0 unless check_dbi('usergroup.get','selectRights');
+     delete $rq->{'params'}{'selectRights'};
+     $flags->{'flSelectRights'}=1;
+     return 1
+   },
+   'after'=>sub {
+     my ($ans,$flags)=@_;
+     return 1 unless $flags->{'flSelectRights'} or !@$ans;
+     my $dbh = DBI->connect(@{$Config{'DBI'}}{'dsn','login','pass'},{RaiseError => 1}) || die 'DB open error: '.$DBI::errstr;
+     my $sth = $dbh->prepare(
+      'select usrgrp.usrgrpid,groups.groupid id,rights.permission from 
+        usrgrp
+         inner join rights on usrgrp.usrgrpid=rights.groupid
+          inner join groups on groups.groupid=rights.id
+       where usrgrp.usrgrpid in ('.join(',',map {$_->{'usrgrpid'}} @$ans).')'
+                            );
+     $sth->execute;
+     my %rights;
+     while (my $hr=$sth->fetchrow_hashref) {
+      my $ugid=delete $hr->{'usrgrpid'};
+      push @{$rights{$ugid}},$hr;
+     }
+     $_->{'rights'}=$rights{$_->{'usrgrpid'}} || [] foreach @$ans;
+     1;
+   },
+ },
+ 'item.get'=>{
+   'before'=>sub {
+     my ($rq,$flags)=@_;
+     return 1 unless $rq->{'params'}{'expandNames'};
+     delete $rq->{'params'}{'expandNames'};
+     $flags->{'ExpandNames'}=[];
+     my $out=$rq->{'params'}{'output'};
+     unless ($out eq 'extend') {
+      if (ref($out) eq 'ARRAY') {
+       my @UnsetInRes=
+        grep { my $ma=$_;             
+               ! grep /^${ma}$/,@$out;
+             } 'name','key_';
+       if ( @UnsetInRes ) {
+        $flags->{'ExpandNames'}=\@UnsetInRes;
+        push @$out,@UnsetInRes
+       }
+      } else {
+       $rq->{'params'}{'output'}='extend';
+      }
+     }
+     1;
+   },
+  'after'=>sub {
+     my ($ans,$flags)=@_;
+     return 1 unless $flags->{'ExpandNames'};
+     doItemNameExpansion($ans,@{$flags->{'ExpandNames'}});
+  },
+ }
+);
+
 # zbx internally doing some nasty things such as:
 # POST $url {"jsonrpc": "2.0","method":"user.authenticate","params":{"user":"Admin","password":"zabbix"},"auth": null,"id":0}
 sub zbx  {
  my $what2do=shift;
- my ($req,$flExpandNames,@UnsetKeysInResult);
+ my ($req,$rslt,%flags);
  my $ua=$UserAgent{'reqObj'};
  unless ($Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent') {
   print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";
@@ -273,27 +360,10 @@ sub zbx  {
  given ($what2do) {
   when (/^[a-z]+?\.[a-z]+$/) {
    my $userParams=shift;
-   if ( ref($userParams) eq 'HASH' ) {
-    @{$req->{'params'}}{keys %{$userParams}}=values %{$userParams};
-   } else {
-    $req->{'params'}=$userParams;
-   }
-   if ( ($what2do eq 'item.get') && $req->{'params'}{'expandNames'} ) {
-    delete $req->{'params'}{'expandNames'};
-    $flExpandNames=1;
-    my $outcfg=$req->{'params'}{'output'};
-    unless ($outcfg eq 'extend') {
-     if (ref $outcfg eq 'ARRAY') {
-      foreach my $mandAttr ('name','key_') {
-       unless ( grep { $_ eq $mandAttr } @{$outcfg} ) {
-        push @{$outcfg},$mandAttr;
-        push @UnsetKeysInResult,$mandAttr;
-       }
-      }
-     } else {
-      $req->{'params'}{'output'}='extend';
-     }
-    }
+   given (ref($userParams)) {
+    when ('')      { $req->{'params'}=$userParams }
+    when ('ARRAY') { @{$req->{'params'}}=@{$userParams} }
+    when ('HASH')  { %{$req->{'params'}}=%{$userParams} }
    }
   };
   when ('auth') {
@@ -338,6 +408,9 @@ sub zbx  {
   default { setErr 'Command '.$what2do.' is unsupported (yet). Please make request to maintainer to add this feature';
             return 0 }
  } # <- given ($what2do)
+ if ( ref($APIPatcher{$what2do}{'before'}) eq 'CODE' ) {
+  return 0 unless &{$APIPatcher{$what2do}{'before'}}($req,\%flags);
+ }
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'} and ! $flGetVersion;
  my $pars=$req->{'params'};
  if ($method=~m/\.(?:delete|update)/ and ! ((ref($pars) eq 'ARRAY' and scalar(@$pars)) or (ref($pars) eq 'HASH' and %$pars))) {
@@ -375,7 +448,7 @@ sub zbx  {
   setErr('Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'},$ConfigCopy{'flDieOnError'});
   return 0;
  }
- my $rslt=$JSONAns->{'result'};
+ $rslt=$JSONAns->{'result'};
  if ( $ConfigCopy{'flDebug'} and $ConfigCopy{'flDbgResultAsListSize'} ) {
   my $JSONAnsCopy;
   my @k=grep {$_ ne 'result'} keys %$JSONAns;
@@ -396,8 +469,10 @@ sub zbx  {
   web_logout if $Config{'flWebLoginSuccess'};
  } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
   return $rslt->[0];
- } 
- doItemNameExpansion($rslt,@UnsetKeysInResult) if $flExpandNames;
+ }
+ if ( ref($APIPatcher{$what2do}{'after'}) eq 'CODE' ) {
+  return 0 unless &{$APIPatcher{$what2do}{'after'}}($rslt,\%flags);
+ }
  return $rslt;
 }
 
