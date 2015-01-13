@@ -31,6 +31,7 @@ my %ErrMsg;
 my $JSONRaw;
 my %SavedCreds;
 my %cnfPar2cnfKey=('debug'=>{'type'=>'boolean','key'=>'flDebug'},
+                   'pretty'=>{'type'=>'boolean','key'=>'flPrettyJSON'},
                    'wildcards'=>{'type'=>'boolean','key'=>'flSearchWildcardsEnabled'},
                    'timeout'=>{'type'=>'integer','key'=>'rqTimeout'},
                    'dbDSN'=>{'type'=>'dsnString','key'=>'DBI.dsn'},
