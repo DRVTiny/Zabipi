@@ -21,7 +21,7 @@ use LWP::UserAgent;
 
 our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
 
-use constant DEFAULT_ITEM_DELAY=>30;
+use constant { DEFAULT_ITEM_DELAY=>30, HASHED_PWD_PREFIX=>'{HASH}' };
 
 my %Config=(
   'default_params'=>{'item.create'=>{'delay'=>DEFAULT_ITEM_DELAY}}
@@ -77,8 +77,8 @@ sub new {
  my ($myname,$apiUrl,$hlOtherPars)=@_;
  die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
- $Config{'apiUrl'}=$apiUrl;
- $Config{'authToken'}='';
+ @Config{'apiUrl','authToken'}=($apiUrl,undef);
+ $UserAgent{'dbHandle'}=undef;
  if (defined($hlOtherPars)) {
   unless (ref($hlOtherPars) eq 'HASH') {
    setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
@@ -258,9 +258,15 @@ sub queue_get {
 } # <- sub queue_get
 
 sub check_dbi {
- return 1 if ref($Config{'DBI'}) eq 'HASH' and scalar(grep {defined($_)} @{$Config{'DBI'}}{'dsn','login','pass'}) == 3;
- setErr 'Insufficient database connection properties given, but method or its parameter requires direct database connection';
- 0;
+ $UserAgent{'dbHandle'}=ref($UserAgent{'dbHandle'}) eq 'DBI::db'
+  ?$UserAgent{'dbHandle'}
+  :&{sub { 
+      unless ( ref($Config{'DBI'}) eq 'HASH' and scalar(grep {defined($_)} @{$Config{'DBI'}}{'dsn','login','pass'}) == 3 ) {
+       setErr 'Insufficient database connection properties given, but method or its parameter requires direct database connection';
+       return 0
+      }
+      return DBI->connect(@{$Config{'DBI'}}{'dsn','login','pass'},{RaiseError => 1}) || die 'DB open error: '.$DBI::errstr
+   }}
 }
 
 my %APIPatcher=(
@@ -268,15 +274,15 @@ my %APIPatcher=(
    'before'=>sub {
      my ($rq,$flags)=@_;
      return 1 unless $rq->{'params'}{'selectRights'};
-     return 0 unless check_dbi('usergroup.get','selectRights');
+     return 0 unless check_dbi;
      delete $rq->{'params'}{'selectRights'};
      $flags->{'flSelectRights'}=1;
      return 1
    },
    'after'=>sub {
      my ($ans,$flags)=@_;
-     return 1 unless $flags->{'flSelectRights'} or !@$ans;
-     my $dbh = DBI->connect(@{$Config{'DBI'}}{'dsn','login','pass'},{RaiseError => 1}) || die 'DB open error: '.$DBI::errstr;
+     return 1 unless $flags->{'flSelectRights'} and @$ans;
+     my $dbh = check_dbi;
      my $sth = $dbh->prepare(
       'select usrgrp.usrgrpid,groups.groupid id,rights.permission from 
         usrgrp
@@ -322,7 +328,59 @@ my %APIPatcher=(
      return 1 unless $flags->{'ExpandNames'};
      doItemNameExpansion($ans,@{$flags->{'ExpandNames'}});
   },
- }
+ },
+ 'user.get'=>{
+   'before'=>sub {
+     my ($rq,$flags)=@_;
+     return 1 unless $rq->{'params'}{'selectPasswd'};
+     return 0 unless check_dbi;
+     delete $rq->{'params'}{'selectPasswd'};
+     $flags->{'flSelectPasswd'}=1;
+   },
+   'after'=>sub {
+     my ($ans,$flags)=@_;
+     return 1 unless $flags->{'flSelectPasswd'} or !@$ans;
+     return 0 unless my $dbh = check_dbi;
+     my %ObjByID=map {$_->{'userid'}=>$_} @$ans;
+     my $sth = $dbh->prepare('select userid,passwd from users where userid in ('.join(',',keys %ObjByID).')');
+     $sth->execute;
+     while (my $hr=$sth->fetchrow_hashref) {
+      $ObjByID{$hr->{'userid'}}{'passwd'}=HASHED_PWD_PREFIX.$hr->{'passwd'};
+     }
+     1;
+   },   
+ },
+ 'user.create'=>{
+   'before'=>sub {
+     my ($rq,$flags)=@_;
+     my ($i,%HashPUsr)=(0,());
+     foreach my $usr ( @{ref($rq->{'params'}) eq 'ARRAY'?$rq->{'params'}:[$rq->{'params'}]} ) {
+      do {
+       setErr('Cant create user without password specified in the "passwd" attribute');
+       return 0
+      } unless my $pass=$usr->{'passwd'};
+      next unless substr($pass,0,length(HASHED_PWD_PREFIX)) eq HASHED_PWD_PREFIX;
+      $usr->{'passwd'}=substr($HashPUsr{$i}=substr($pass,length(HASHED_PWD_PREFIX)),0,10);      
+     } continue {
+      $i++
+     }
+     if (%HashPUsr and !check_dbi) {
+      setErr('It seems, you need to set hashed passwords. Sorry, but you cant directly update passwords in database without db connection!');
+      return 0
+     }
+     $flags->{'DirSetPass'}=\%HashPUsr;
+   },
+   'after'=>sub {
+     my ($ans,$flags)=@_;
+     return 1 unless ref($flags->{'DirSetPass'}) eq 'HASH' and %{$flags->{'DirSetPass'}} and ref($ans->{'userids'}) eq 'ARRAY' and @{$ans->{'userids'}};
+     my $dbh=check_dbi || die 'No database connection available';
+     while (my ($ix,$hpass)=each $flags->{'DirSetPass'}) {
+      my $sqlup=join('','update users set passwd=',"'${hpass}'",' where userid=',$ans->{'userids'}[$ix]);
+      my $sth=$dbh->prepare($sqlup);
+      $sth->execute or die 'Cant update user password with sql statement: '.$sqlup;
+     };
+   },   
+ },  
 );
 
 # zbx internally doing some nasty things such as:
