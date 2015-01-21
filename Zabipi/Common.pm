@@ -1,5 +1,8 @@
 package Monitoring::Zabipi::Common;
+use Exporter qw(import);
 use JSON::XS;
+
+our @EXPORT_OK=qw(fillHashInd to_json_str doItemNameExpansion);
 
 sub fillHashInd {
  my ($d,@i)=@_;

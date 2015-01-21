@@ -15,38 +15,9 @@ use DBI;
 use Date::Parse qw(str2time);
 use Exporter qw(import);
 use JSON qw( decode_json encode_json );
-use JSON::XS;
 use LWP::UserAgent;
+use Monitoring::Zabipi::Common qw(fillHashInd to_json_str doItemNameExpansion);
 #use Data::Dumper qw(Dumper);
-
-our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
-
-use constant { DEFAULT_ITEM_DELAY=>30, HASHED_PWD_PREFIX=>'{HASH}' };
-
-my %Config=(
-  'default_params'=>{'item.create'=>{'delay'=>DEFAULT_ITEM_DELAY}}
-);
-
-my %ErrMsg;
-my $JSONRaw;
-my %SavedCreds;
-my %cnfPar2cnfKey=('debug'=>{'type'=>'boolean','key'=>'flDebug'},
-                   'pretty'=>{'type'=>'boolean','key'=>'flPrettyJSON'},
-                   'wildcards'=>{'type'=>'boolean','key'=>'flSearchWildcardsEnabled'},
-                   'timeout'=>{'type'=>'integer','key'=>'rqTimeout'},
-                   'dbDSN'=>{'type'=>'dsnString','key'=>'DBI.dsn'},
-                   'dbLogin'=>{'type'=>'notEmptyString','key'=>'DBI.login'},
-                   'dbPass'=>{'type'=>'anyString','key'=>'DBI.pass'},
-                  );
-my %rx=(
- 'boolean'=>'^(?:y(?:es)?|true|ok|1|no?|false|0)$',
- 'integer'=>'^[-+]?[0-9]+$',
- 'float'=>'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
- 'dsnString'=>'^dbi:(?:[^:]*:)+(?:;[^=;]+=[^=;]+)*$',
- 'notEmptyString'=>'^.+$',
- 'anyString'=>'^.*$', 
-);
-
 sub new;
 sub setErr;
 sub zbx;
@@ -61,21 +32,72 @@ sub queue_get;
 sub check_dbi;
 sub fillHashInd;
 
-my %UserAgent;
-my %Cmd2APIMethod=('auth'=>'user.authenticate',
-                   'getVersion'=>'apiinfo.version',
-                   'logout'=>'user.logout',
-                   'searchHostByName'=>'host.get',
-                   'searchUserByName'=>'user.get',
-                   'createItem'=>'item.create',
-                   'getHostInterfaces'=>'hostinterface.get',
-                   'createUser'=>'user.create',
-                   'getQueue'=>'queue.get',
-                  );                 
+our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
+
+use constant {
+        DEFAULT_ITEM_DELAY=>30,
+        HASHED_PWD_PREFIX=>'{HASH}' 
+};
+
+my (%Config,%ErrMsg,%UserAgent,%SavedCreds);
+my $JSONRaw;
+
+my %cnfPar2cnfKey=(
+        'debug'=>{     'type'=>'boolean',       'key'=>'flDebug'                 },
+        'pretty'=>{    'type'=>'boolean',       'key'=>'flPrettyJSON'            },
+        'wildcards'=>{ 'type'=>'boolean',       'key'=>'flSearchWildcardsEnabled'},
+        'timeout'=>{   'type'=>'integer',       'key'=>'rqTimeout'               },
+        'dbDSN'=>{     'type'=>'dsnString',     'key'=>'DBI.dsn'                 },
+        'dbLogin'=>{   'type'=>'notEmptyString','key'=>'DBI.login'               },
+        'dbPass'=>{    'type'=>'anyString',     'key'=>'DBI.pass'                },
+);
+
+my %rx=(
+        'boolean'=>'^(?:y(?:es)?|true|ok|1|no?|false|0)$',
+        'integer'=>'^[-+]?[0-9]+$',
+        'float'=>'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
+        'dsnString'=>'^dbi:(?:[^:]*:)+(?:;[^=;]+=[^=;]+)*$',
+        'notEmptyString'=>'^.+$',
+        'anyString'=>'^.*$', 
+);
+
+my %Cmd2APIMethod=(
+        'auth'             => 'user.authenticate',
+        'getVersion'       => 'apiinfo.version',
+        'logout'           => 'user.logout',
+        'searchHostByName' => 'host.get',
+        'searchUserByName' => 'user.get',
+        'createItem'       => 'item.create',
+        'getHostInterfaces'=> 'hostinterface.get',
+        'createUser'       => 'user.create',
+        'getQueue'         => 'queue.get',
+);
+                  
+my %MethodPars = (       
+        'user.login' => {
+            'noauth'=>1,
+        },
+        'user.checkAuthentication' => {
+            'noauth'=>1,
+        },
+        'apiinfo.version' => {
+            'noauth'=>1,
+        },
+        'queue.get'=>{
+            'webcall'=>\&queue_get,
+        },
+        'graphimage.get'=>{
+            'webcall'=>sub { return 1 },
+        },
+        'item.create'=>{
+            'defpars'=>{'delay'=>DEFAULT_ITEM_DELAY},
+        },
+);
+$MethodPars{'user.authenticate'}=$MethodPars{'user.login'};
+
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
- die "The second parameter must be a hash reference\n" if $hlOtherPars and ! (ref($hlOtherPars) eq 'HASH');
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  @Config{'apiUrl','authToken'}=($apiUrl,undef);
  $UserAgent{'dbHandle'}=undef;
@@ -126,24 +148,13 @@ sub new {
  return 1;
 }
 
-sub fillHashInd {
- my ($d,@i)=@_;
- if (@i==1) {
-  return \$d->{$i[0]}
- } else {
-  my $e=shift @i;
-  fillHashInd($d->{$e}=$d->{$e} || {},@i)
- }
-}
-
-sub to_json_str {
- my ($cfg,$plStruct)=@_;
- return 0 unless defined $plStruct and ref($plStruct)=~m/^(?:ARRAY|HASH)?$/;
- if (ref $plStruct) {
-  return $cfg->{'flPrettyJSON'}?JSON::XS->new->utf8->pretty(1)->encode($plStruct):encode_json($plStruct);
- } else {
-  return $cfg->{'flPrettyJSON'}?JSON::XS->new->utf8->pretty(1)->encode(decode_json($plStruct)):$plStruct;
- }
+sub setErr {
+ my $err_msg=scalar(shift);
+ utf8::encode($err_msg);
+ die $err_msg if scalar(shift);
+ print STDERR $err_msg,"\n" if $Config{'flDebug'};
+ $ErrMsg{'text'}=$err_msg;
+ return 1;
 }
 
 sub zbx_api_url {
@@ -152,15 +163,6 @@ sub zbx_api_url {
 
 sub zbx_api_version {
  return $Config{'apiVersion'} || undef;
-}
-
-sub setErr {
- my $err_msg=scalar(shift);
- utf8::encode($err_msg);
- die $err_msg if scalar(shift);
- print STDERR $err_msg,"\n" if $Config{'flDebug'};
- $ErrMsg{'text'}=$err_msg;
- return 1;
 }
 
 sub zbx_last_err {
@@ -173,39 +175,10 @@ sub zbx_json_raw {
 
 sub getDefaultMethodParams {
  my $method=shift;
- my ($mpar,$cpar)=@{$Config{'default_params'}}{($method,'common')};  
+ my ($mpar,$cpar)=($MethodPars{$method}{'defpars'},$Config{'default_params'}{'common'});
  return {} unless $mpar or $cpar;
  return { ref($cpar) eq 'HASH'?%{$cpar}:(),ref($mpar) eq 'HASH'?%{$mpar}:() };
 }
-
-sub doItemNameExpansion {
- my ($items,@unsetKeys)=@_;
- 
- foreach my $item ( @{$items} ) {
-  my ($itemName,$itemKey)=@{$item}{('name','key_')};
-  my %h=map { $_=>1 } ($itemName=~m/\$([1-9])/g);
-  unless ( %h ) {
-   $item->{'name_expanded'}=$itemName;
-   next;
-  }
-  for ($itemKey) {
-   s%[^\[]+\[\s*%%;
-   s%\]\s*$%%;
-  }
-  
-  my @l=map { s/(?:^['"]|['"]$)//g; $_ } ($itemKey=~m/(?:^|,)\s*("[^"]*"|'[^']*'|[^'",]*)\s*(?=(?:,|$))/g);
-  $itemName=~s/\$$_/$l[$_-1]/g foreach keys %h;
-  $item->{'name_expanded'}=$itemName;
-  delete @{$item}{@unsetKeys} if @unsetKeys;
- }
- return 1;
-}
-
-
-my %WebMethod=(
-                   'queue.get'=>\&queue_get,
-                   'graphimage.get'=>sub { return 1 },
-                       );
                        
 sub http_ {
  my ($method,$relUrl,$pars)=(lc(shift),shift); 
@@ -385,7 +358,7 @@ my %APIPatcher=(
 
 # zbx internally doing some nasty things such as:
 # POST $url {"jsonrpc": "2.0","method":"user.authenticate","params":{"user":"Admin","password":"zabbix"},"auth": null,"id":0}
-sub zbx  {
+sub zbx {
  my $what2do=shift;
  my ($req,$rslt,%flags);
  my $ua=$UserAgent{'reqObj'};
@@ -393,28 +366,31 @@ sub zbx  {
   print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";
   return 0
  }
- my $flGetVersion=$what2do=~m/apiinfo\.version|getVersion/?1:0;
- my $flDoAuth=$what2do=~m/(?:auth|user\.(?:login|authenticate))/?1:0;
- if ( !($flGetVersion or $flDoAuth or $Config{'authToken'}) ) {
-  setErr "You must be authorized first. Use 'auth' before '$what2do'";
-  return 0
- }
- my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
- unless ( $method ) {
+ do {
   setErr "Unknown operation requested: $what2do";
   return 0
- }
- if ( $WebMethod{$method} ) {
+ } unless my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
+ 
+ my $mp=$MethodPars{$method};
+ 
+ unless ($Config{'authToken'} or $mp->{'noauth'}) {
+  setErr "You must be authorized first. Use 'auth' before try to '$what2do'";
+  return 0
+ } 
+ 
+ if ( $mp->{'webcall'} ) {
   unless ($Config{'flWebLoginSuccess'}) {
    return 0 unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$SavedCreds{'passwd'}.'&autologin=1&enter=Sign+in');
    do { setErr 'Cant get Zabbix Web Session ID'; return 0 }
     unless ($UserAgent{'SessionID'})=$html=~m/name="sid" value="([0-9a-f]+)"/;   
    $Config{'flWebLoginSuccess'}=1;
   }
-  return &{$WebMethod{$method}}(@_);
+  return $mp->{'webcall'}(@_)
  }
+ 
 # Set default params ->
  @{$req}{'jsonrpc','params','method','id'}=('2.0',getDefaultMethodParams($method),$method,0);
+ 
 # <- Set default params
  given ($what2do) {
   when (/^[a-z]+?\.[a-z]+$/) {
@@ -470,7 +446,7 @@ sub zbx  {
  if ( ref($APIPatcher{$what2do}{'before'}) eq 'CODE' ) {
   return 0 unless &{$APIPatcher{$what2do}{'before'}}($req,\%flags);
  }
- @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'} and ! $flGetVersion;
+ @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'} and ! $mp->{'noauth'};
  my $pars=$req->{'params'};
  if ($method=~m/\.(?:delete|update)/ and ! ((ref($pars) eq 'ARRAY' and scalar(@$pars)) or (ref($pars) eq 'HASH' and %$pars))) {
   setErr 'Cant execute "delete" or "update" without parameters';
@@ -536,3 +512,4 @@ sub zbx  {
 }
 
 1;
+
