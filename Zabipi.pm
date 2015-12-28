@@ -129,7 +129,7 @@ sub new {
   }  
  }
  ($UserAgent{'baseUrl'}=$apiUrl)=~s%/[^/]+$%%;
- my $ua = LWP::UserAgent->new;
+ my $ua = LWP::UserAgent->new('ssl_opts' => { 'verify_hostname' => 0 });
  $ua->cookie_jar({'autosave'=>1});
  $ua->show_progress($Config{'flDebug'}?1:0);
  $UserAgent{'reqObj'}=$ua; 
