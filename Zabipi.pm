@@ -139,12 +139,11 @@ sub new {
  $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":0}');
  my $r=$ua->request($http_post);
  unless ( $r->is_success ) {
-  setErr('Cant get API version info: Zabbix API seems to be  configured incorrectly');
+  setErr('Cant get API version info: Zabbix API seems to be configured incorrectly');
   return 0
  }
  $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
  $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
-# print Dumper(\%Config);
  return 1;
 }
 
@@ -361,6 +360,10 @@ my %APIPatcher=(
 sub zbx {
  my $what2do=shift;
  my ($req,$rslt,%flags);
+ unless ( $Config{'apiVersion'} ) {
+  print STDERR 'API not initialized yet, use "new" method with the correct parameters and check its return code',"\n" unless $what2do eq 'logout';
+  return 0
+ }
  my $ua=$UserAgent{'reqObj'};
  unless ($Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent') {
   print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";

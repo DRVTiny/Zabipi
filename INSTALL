@@ -32,6 +32,15 @@ BEGIN {
 use Monitoring::Zabipi qw(zbx zbx_last_err);
 ---
 
-
-
-
+** Usage **
+I advice to copy prologue.pl and setenv.conf from examples/ to YOUR_SCRIPT.pl and setenv.conf respectively 
+setenv.conf must be in the same directory as YOUR_SCRIPT.pl
+Than add your code in YOUR_SCRIPT.pl after line "# Your code goes here ->"
+For example it may be:
+---
+print zbx('host.get',{'search'=>{'host'=>'*jupiter*'},'output'=>['hostid']})->[0]{'hostid'},"\n";
+---
+To know well what the hell happens when you get error about "Cant authorize you on" - try to run 
+---
+YOUR_SCRIPT.pl -x
+---
