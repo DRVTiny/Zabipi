@@ -33,7 +33,8 @@ zbx('auth',@SETENV{'ZBX_LOGIN','ZBX_PASS'}) ||
  die 'I cant authorize you on ',$zbxConnectTo,". Check your credentials and run this script with the first key '-x' to know why this happens exactly\n";
 
 # Your code goes here ->
-
+# For example, you may uncomment this line to get "Zabbix server" on STDOUT:
+#print zbx('host.get', {'search'=>{'host'=>'Zabbix*'},'output'=>['name']})->[0]{'name'},"\n";
 
 END {
  zbx('logout') if zbx_api_url;
