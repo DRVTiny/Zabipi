@@ -344,13 +344,15 @@ my %APIPatcher=(
    },
    'after'=>sub {
      my ($ans,$flags)=@_;
-     return 1 unless ref($flags->{'DirSetPass'}) eq 'HASH' and %{$flags->{'DirSetPass'}} and ref($ans->{'userids'}) eq 'ARRAY' and @{$ans->{'userids'}};
+     return 1 unless 
+      ( ref($flags->{'DirSetPass'}) eq 'HASH' and my %DirSetPass=%{$flags->{'DirSetPass'}} )
+       and
+      ( ref($ans->{'userids'}) eq 'ARRAY' and @{$ans->{'userids'}} );
      my $dbh=check_dbi || die 'No database connection available';
-     while (my ($ix,$hpass)=each $flags->{'DirSetPass'}) {
-      my $sqlup=join('','update users set passwd=',"'${hpass}'",' where userid=',$ans->{'userids'}[$ix]);
-      my $sth=$dbh->prepare($sqlup);
-      $sth->execute or die 'Cant update user password with sql statement: '.$sqlup;
-     };
+     my $sth=$dbh->prepare('UPDATE users SET passwd=? WHERE userid=?');
+     while (my ($ix,$hpass)=each %DirSetPass) {
+      $sth->execute($hpass, $ans->{'userids'}[$ix]) or die 'Cant update user{userid='.$ans->{'userids'}[$ix].'} password. Database error: '.$dbh->errstr;
+     }
    },   
  },  
 );
