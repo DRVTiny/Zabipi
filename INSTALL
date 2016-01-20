@@ -11,10 +11,21 @@ Reason: JSON pretty printing in debug mode (see flPrettyJSON flag description)
 
 ** Installation **
 You have two different choices where to place Zabipi.pm
+
 1) Make directory Monitoring in some "unusual" place
 In this case you must add the directory containing the previously created "Monitoring" subfolder to the @INC global array.
-Doing so in your program is as simple as push @INC,$dir or unshift @INC,$dir at the BEGIN block.
-Refer to the Perl documentation to know how to do it globally and "permanently".
+Doing so in your program is as simple as push @INC,$dir or unshift @INC,$dir at the BEGIN block. Refer to the Perl documentation to know how to do it globally and "permanently".
+You can also simply insert "use lib 'DIRECTORY';" somewhere before "use Monitoring::Zabipi;"
+
+Example commands to do installation in described manner:
+---
+mkdir -p /opt/Perl5/libs/Monitoring
+git clone https://github.com/DRVTiny/Zabipi.git /opt/Perl5/libs/Monitoring
+---
+After that you can include this line in  your perl script:
+---
+use lib '/opt/Perl5/libs';
+---
 2) Make directory Monitoring in the one of the directories, which already are in the @INC global array.
 To view the contents of the @INC array, you may use this command:
  perl -e 'print "  \@INC:\n\t".join("\n\t",@INC)."\n"'
