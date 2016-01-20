@@ -44,7 +44,7 @@ use Monitoring::Zabipi qw(zbx zbx_last_err);
 ---
 
 ** Usage **
-I advice to copy prologue.pl and setenv.conf from examples/ to YOUR_SCRIPT.pl and setenv.conf respectively 
+I advise you to copy prologue.pl and setenv.conf from examples/ to YOUR_SCRIPT.pl and setenv.conf respectively 
 setenv.conf must be in the same directory as YOUR_SCRIPT.pl
 Than add your code in YOUR_SCRIPT.pl after line "# Your code goes here ->"
 For example it may be:
