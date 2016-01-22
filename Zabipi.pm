@@ -17,7 +17,7 @@ use Exporter qw(import);
 use JSON qw( decode_json encode_json );
 use LWP::UserAgent;
 use Monitoring::Zabipi::Common qw(fillHashInd to_json_str doItemNameExpansion);
-#use Data::Dumper qw(Dumper);
+use Data::Dumper qw(Dumper);
 sub new;
 sub setErr;
 sub zbx;
@@ -141,6 +141,10 @@ sub new {
  unless ( $r->is_success ) {
   setErr('Cant get API version info: Zabbix API seems to be configured incorrectly');
   return 0
+ }
+ unless ( ($r->header('Content-Type')=~m/(.+)(?:;.+)?$/)[0] =~ m%/json$%i ) {
+   setErr('Cant get API version info: Unknown content-type in response headers');
+   return 0
  }
  $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
  $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
@@ -400,11 +404,11 @@ sub zbx {
  given ($what2do) {
   when (/^[a-z]+?\.[a-z]+$/) {
    my $userParams=shift;
-   given (ref($userParams)) {
-    when ('')      { $req->{'params'}=$userParams }
-    when ('ARRAY') { @{$req->{'params'}}=@{$userParams} }
-    when ('HASH')  { %{$req->{'params'}}=%{$userParams} }
+   unless ( ref($userParams)=~m/^(?:ARRAY|HASH)?$/) {
+    setErr 'You can specify only one of HASH-reference, ARRAY-reference of SCALAR as a second parameter for zbx()';
+    return undef
    }
+   $req->{'params'}=$userParams
   };
   when ('auth') {
    if (!(@_ == 2 or @_ == 3)) {
