@@ -1,13 +1,18 @@
 ** Dependencies **
-Monitoring::Zabipi has the following dependencies:
-1) Date::Parse
-Reason: used by queue.get native method
-2) LWP::UserAgent
-Reason: used to make POST requests to the Zabbix frontend
+Monitoring::Zabipi has the following dependencies on the other Perl5 modules:
+1) DBI
+2) DBD::mysql
+1 and 2 used by all "native methods" and functionality hacks/bug fixes for original Zabbix API methods
 3) JSON
 Reason: Used to assemble JSON-strings from Perl datastructures when making requests and to decompile JSON strings, received from the Zabbix frontend, to Perl datastructures
 4) JSON::XS
 Reason: JSON pretty printing in debug mode (see flPrettyJSON flag description)
+5) LWP::UserAgent
+Reason: used to make POST requests to the Zabbix frontend
+6) Date::Parse
+Reason: used by queue.get native method
+
+You can find packages for all of this modules in Debian and CentOS Linux distributives (for example).
 
 ** Installation **
 You have two different choices where to place Zabipi.pm
