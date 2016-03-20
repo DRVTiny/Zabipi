@@ -41,7 +41,7 @@ use constant {
         HASHED_PWD_PREFIX=>'{HASH}' 
 };
 
-my (%Config,%ErrMsg,%UserAgent,%SavedCreds);
+my (%Config,%LastError,%UserAgent,%SavedCreds);
 my $JSONRaw;
 
 my %cnfPar2cnfKey=(
@@ -98,7 +98,7 @@ my %MethodPars = (
 $MethodPars{'user.authenticate'}=$MethodPars{'user.login'};
 my ($zbxNextInstanceID, $zbxCurInstanceID)=(0, 0);
 sub new {
- return 0 unless @_;
+ return undef unless @_;
  my ($slfClass,$apiUrl,$hlOtherPars)=@_;
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  my $oid=$zbxNextInstanceID++;
@@ -121,68 +121,64 @@ sub new {
     $slf->err('Wrong parameter passed to the "new" constructor: %s must be %s', $cnfPar, $t);
     return undef;
    }
-   ${&fillHashInd(\%Config,split /\./,$k)}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
+   ${&fillHashInd(\%slfConfig,split /\./,$k)}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
   }
   if (defined $hlOtherPars->{'debug_methods'}) {
    my $lstMethods2Dbg=$hlOtherPars->{'debug_methods'};
    if (! ref $lstMethods2Dbg) {
-    $Config{'lstDebugMethods'}={ map { lc($_)=>1 } split /[,;]/,$lstMethods2Dbg };
+    $slfConfig{'lstDebugMethods'}={ map { lc($_)=>1 } split /[,;]/,$lstMethods2Dbg };
    } elsif ((ref $lstMethods2Dbg eq 'HASH') && %{$lstMethods2Dbg} ) {
-    $Config{'lstDebugMethods'}=$lstMethods2Dbg;
+    $slfConfig{'lstDebugMethods'}=$lstMethods2Dbg;
    } elsif ((ref $lstMethods2Dbg eq 'ARRAY') && @{$lstMethods2Dbg}) {
-    $Config{'lstDebugMethods'}={ map { lc($_)=>1 } @{$lstMethods2Dbg} };
+    $slfConfig{'lstDebugMethods'}={ map { lc($_)=>1 } @{$lstMethods2Dbg} };
    } else {
-    print STDERR 'ERROR: List of the methods to debug may be: hashref, arrayref, string';
-    return 0;
+    $slf->err('List of the methods to debug may be presented as: hashref, arrayref, string, so %s now allowed here', ref($lstMethods2Dbg));
+    return undef;
    }
   }  
  }
  ($UserAgent{'baseUrl'}=$apiUrl)=~s%/[^/]+$%%;
  my $ua = LWP::UserAgent->new('ssl_opts' => { 'verify_hostname' => 0 });
  $ua->cookie_jar({'autosave'=>1});
- $ua->show_progress($Config{'flDebug'}?1:0);
+ $ua->show_progress($slfConfig{'flDebug'}?1:0);
  $UserAgent{'reqObj'}=$ua; 
 # Try to get API version
  my $http_post = HTTP::Request->new('POST' => $apiUrl);
  $http_post->header('content-type' => 'application/json');
  $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":0}');
- my $r=$ua->request($http_post);
- unless ( $r->is_success ) {
-  setErr('Cant get API version info: Zabbix API seems to be configured incorrectly');
-  return 0
+ my $res=$ua->request($http_post);
+ unless ( $res->is_success ) {
+  $slf->err('Cant get API version info: Zabbix API seems to be configured incorrectly. Status of the HTTP response: %s',$res->status_line);
+  return undef
  }
- unless ( ($r->header('Content-Type')=~m/(.+)(?:;.+)?$/)[0] =~ m%/json$%i ) {
-   setErr('Cant get API version info: Unknown content-type in response headers');
-   return 0
+ unless ( ($res->header('Content-Type')=~m/(.+)(?:;.+)?$/)[0] =~ m%/json$%i ) {
+  $slf->err('Cant get API version info: Unknown content-type in response headers');
+  return undef
  }
- $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
- $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
+ $slfConfig{'apiVersion'}=decode_json( $res->decoded_content )->{'result'};
+ $slfConfig{'cmd2api'}={%Cmd2APIMethod};
+ $slfConfig{'cmd2api'}{'auth'}='user.login' if [$slfConfig{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
+ return $slf;
+}
+
+sub err {
+ my ($slf,$errMsg,@errMsgArgs)=@_;
+ return $LastError{$slf->()}{'text'} unless defined($errMsg) and ! ref($errMsg);
+ utf8::encode($_) foreach $errMsg, @errMsgArgs;
+ my $errMsgStr=sprintf($errMsg, @errMsgArgs);
+ my $cnf=$Config{$slf->()};
+ die $errMsgStr if $cnf->{'flDieOnError'};
+ print STDERR $errMsgStr,"\n" if $cnf->{'flDebug'};
+ $LastError{$slf->()}{'text'}=$errMsgStr;
  return 1;
 }
 
-sub setErr {
- my $err_msg=scalar(shift);
- utf8::encode($err_msg);
- die $err_msg if scalar(shift);
- print STDERR $err_msg,"\n" if $Config{'flDebug'};
- $ErrMsg{'text'}=$err_msg;
- return 1;
+sub api_url { 
+ return $Config{$_[0]->()}{'apiUrl'};
 }
 
-sub zbx_api_url {
- return $Config{'apiUrl'} || undef;
-}
-
-sub zbx_api_version {
- return $Config{'apiVersion'} || undef;
-}
-
-sub zbx_last_err {
- return $ErrMsg{'text'} || 0;
-}
-
-sub zbx_json_raw {
- return $JSONRaw;
+sub api_version {
+ return $Config{$_[0]->()}{'apiVersion'};
 }
 
 sub getDefaultMethodParams {
