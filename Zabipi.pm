@@ -12,10 +12,11 @@ use utf8;
 use strict;
 use warnings;
 use DBI;
-use Date::Parse qw(str2time);
+use HTTP::Date qw(str2time);
 use Exporter qw(import);
-use JSON qw( decode_json encode_json );
+use JSON::XS qw( decode_json encode_json );
 use LWP::UserAgent;
+use URI::Encode;
 use Monitoring::Zabipi::Common qw(fillHashInd to_json_str doItemNameExpansion);
 use Data::Dumper qw(Dumper);
 sub new;
@@ -29,10 +30,10 @@ sub getDefaultMethodParams;
 sub doItemNameExpansion;
 sub http_;
 sub queue_get;
-sub check_dbi;
+sub zbx_get_dbhandle;
 sub fillHashInd;
 
-our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version);
+our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version zbx_get_dbhandle);
 
 use constant {
         DEFAULT_ITEM_DELAY=>30,
@@ -50,6 +51,7 @@ my %cnfPar2cnfKey=(
         'dbDSN'=>{     'type'=>'dsnString',     'key'=>'DBI.dsn'                 },
         'dbLogin'=>{   'type'=>'notEmptyString','key'=>'DBI.login'               },
         'dbPass'=>{    'type'=>'anyString',     'key'=>'DBI.pass'                },
+        'dbPassword'=>'dbPass',
 );
 
 my %rx=(
@@ -95,6 +97,11 @@ my %MethodPars = (
 );
 $MethodPars{'user.authenticate'}=$MethodPars{'user.login'};
 
+sub cnfPar2cnfKey_syn2orig {
+ my $v=shift;
+ ref($v)?$v:cnfPar2cnfKey_syn2orig($cnfPar2cnfKey{$v})
+}
+$cnfPar2cnfKey{$_}=cnfPar2cnfKey_syn2orig($cnfPar2cnfKey{$_}) for grep !ref($cnfPar2cnfKey{$_}), keys %cnfPar2cnfKey;
 sub new {
  return 0 unless @_;
  my ($myname,$apiUrl,$hlOtherPars)=@_;
@@ -106,7 +113,7 @@ sub new {
    setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
    return 0;
   }
-  foreach my $cnfPar ( grep {defined $hlOtherPars->{$_}} keys %cnfPar2cnfKey ) {
+  foreach my $cnfPar ( grep defined($cnfPar2cnfKey{$_}), keys %{$hlOtherPars} ) {
    my ($v,$t,$k)=($hlOtherPars->{$cnfPar},@{$cnfPar2cnfKey{$cnfPar}}{'type','key'});
    unless ($v=~m/$rx{$t}/io) {
     setErr('Wrong parameter passed to the "new" constructor: '.$cnfPar.' must be '.$t);
@@ -204,8 +211,15 @@ sub queue_get {
  my $pars=shift;
 
  return [] unless my $html=http_('GET','queue.php?sid='.$UserAgent{'SessionID'}.'&form_refresh=1&config=2');
- $html=~s%^.*<td>Name</td></tr>(<tr class="even_row".*?)</table>.*$%$1%s;
- my @queue=split /<tr class="(?:even|odd)_row".*?>/,$html;
+# print "QUEUE GET RESULT:\n{$html}\n" if $Config{'flDebug'};
+ my @queue;
+ if (substr($Config{'apiVersion'},0,1) eq '3') {
+  $html=~s%^.*<tbody>(<tr.*?)</tbody></table>.*$%$1%s;
+  @queue=split /<tr.*?>/,$html;
+ } else {
+  $html=~s%^.*<td>Name</td></tr>(<tr class="even_row".*?)</table>.*$%$1%s;
+  @queue=split /<tr class="(?:even|odd)_row".*?>/,$html;
+ }
  shift @queue;
 # @QUEUE_ROW=('time_expected','time_delay','host','item_name');
  my ($selectHosts,$selectItems);
@@ -222,6 +236,7 @@ sub queue_get {
  my (%N2H,%N2HI);
  return [ map {
   my @qitem=/<td>(.+?)<\/td>/g; 
+  print "=== ${qitem[1]} ===\n";
   my @delay=$qitem[1]=~m/([0-9]+)/g;
   my ($hostName,$itemName)=@qitem[2,3];
   {
@@ -233,16 +248,16 @@ sub queue_get {
  } @queue ]
 } # <- sub queue_get
 
-sub check_dbi {
+sub zbx_get_dbhandle {
  $UserAgent{'dbHandle'}=ref($UserAgent{'dbHandle'}) eq 'DBI::db'
   ?$UserAgent{'dbHandle'}
-  :&{sub { 
+  :sub { 
       unless ( ref($Config{'DBI'}) eq 'HASH' and scalar(grep {defined($_)} @{$Config{'DBI'}}{'dsn','login','pass'}) == 3 ) {
        setErr 'Insufficient database connection properties given, but method or its parameter requires direct database connection';
-       return 0
+       return undef
       }
-      return DBI->connect(@{$Config{'DBI'}}{'dsn','login','pass'},{RaiseError => 1}) || die 'DB open error: '.$DBI::errstr
-   }}
+      return DBI->connect(@{$Config{'DBI'}}{'dsn','login','pass'},{'RaiseError' => 1}) || die 'DB open error: '.$DBI::errstr
+   }->()
 }
 
 my %APIPatcher=(
@@ -250,7 +265,7 @@ my %APIPatcher=(
    'before'=>sub {
      my ($rq,$flags)=@_;
      return 1 unless $rq->{'params'}{'selectRights'};
-     return 0 unless check_dbi;
+     return 0 unless zbx_get_dbhandle;
      delete $rq->{'params'}{'selectRights'};
      $flags->{'flSelectRights'}=1;
      return 1
@@ -258,7 +273,7 @@ my %APIPatcher=(
    'after'=>sub {
      my ($ans,$flags)=@_;
      return 1 unless $flags->{'flSelectRights'} and @$ans;
-     my $dbh = check_dbi;
+     my $dbh = zbx_get_dbhandle;
      my $sth = $dbh->prepare(
       'select usrgrp.usrgrpid,groups.groupid id,rights.permission from 
         usrgrp
@@ -309,14 +324,14 @@ my %APIPatcher=(
    'before'=>sub {
      my ($rq,$flags)=@_;
      return 1 unless $rq->{'params'}{'selectPasswd'};
-     return 0 unless check_dbi;
+     return 0 unless zbx_get_dbhandle;
      delete $rq->{'params'}{'selectPasswd'};
      $flags->{'flSelectPasswd'}=1;
    },
    'after'=>sub {
      my ($ans,$flags)=@_;
      return 1 unless $flags->{'flSelectPasswd'} or !@$ans;
-     return 0 unless my $dbh = check_dbi;
+     return 0 unless my $dbh = zbx_get_dbhandle;
      my %ObjByID=map {$_->{'userid'}=>$_} @$ans;
      my $sth = $dbh->prepare('select userid,passwd from users where userid in ('.join(',',keys %ObjByID).')');
      $sth->execute;
@@ -340,7 +355,7 @@ my %APIPatcher=(
      } continue {
       $i++
      }
-     if (%HashPUsr and !check_dbi) {
+     if (%HashPUsr and !zbx_get_dbhandle) {
       setErr('It seems, you need to set hashed passwords. Sorry, but you cant directly update passwords in database without db connection!');
       return 0
      }
@@ -352,7 +367,7 @@ my %APIPatcher=(
       ( ref($flags->{'DirSetPass'}) eq 'HASH' and my %DirSetPass=%{$flags->{'DirSetPass'}} )
        and
       ( ref($ans->{'userids'}) eq 'ARRAY' and @{$ans->{'userids'}} );
-     my $dbh=check_dbi || die 'No database connection available';
+     my $dbh=zbx_get_dbhandle || die 'No database connection available';
      my $sth=$dbh->prepare('UPDATE users SET passwd=? WHERE userid=?');
      while (my ($ix,$hpass)=each %DirSetPass) {
       $sth->execute($hpass, $ans->{'userids'}[$ix]) or die 'Cant update user{userid='.$ans->{'userids'}[$ix].'} password. Database error: '.$dbh->errstr;
@@ -388,8 +403,9 @@ sub zbx {
  } 
  
  if ( $mp->{'webcall'} ) {
+  my $uriEnc=URI::Encode->new({'encode_reserved'=>1});
   unless ($Config{'flWebLoginSuccess'}) {
-   return 0 unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$SavedCreds{'passwd'}.'&autologin=1&enter=Sign+in');
+   return 0 unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$uriEnc->encode($SavedCreds{'passwd'}).'&autologin=1&enter=Sign+in');
    do { setErr 'Cant get Zabbix Web Session ID'; return 0 }
     unless ($UserAgent{'SessionID'})=$html=~m/name="sid" value="([0-9a-f]+)"/;   
    $Config{'flWebLoginSuccess'}=1;
@@ -471,8 +487,9 @@ sub zbx {
  # You dont have possibility to freely redefine apiUrl on every zbx() call
  my $http_post = HTTP::Request->new('POST' => $Config{'apiUrl'});
  $http_post->header('content-type' => 'application/json');
+ print STDERR "Request: Perl structure:\n",Dumper($req) if $ConfigCopy{'flRqDetailDebug'};
  my $jsonrq=encode_json($req);
- print STDERR "JSON request:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
+ print STDERR "Request: In JSON format:\n${jsonrq}\n" if $ConfigCopy{'flDebug'};
  return [] if $ConfigCopy{'flDryRun'};
  $http_post->content($jsonrq);
  $ua->timeout($ConfigCopy{'rqTimeout'}) if defined $ConfigCopy{'rqTimeout'};
