@@ -12,8 +12,8 @@ use constant {
      IFACE_TYPE_SNMP=>2,
 };
 use Exporter qw(import);
-our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService);
+our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists);
 use DBI;
 use Data::Dumper;
 
@@ -62,6 +62,12 @@ sub init {
     sprintf($zo->{'name'}{'fmt'}, @res)
                        :
     join(' '=>@res)    ;
+  };
+  my $st=$dbh->prepare(sprintf('SELECT 1 FROM %s WHERE %s=?', @{$zo}{'table','id_attr'}));
+  $zo->{'check'}{'exists'}=sub {
+   return undef unless $_[0]=~/^\d{1,10}$/;
+   $st->execute(shift);
+   $st->fetchrow_array()
   }
  } 
  $flInitSuccess=1;
@@ -121,6 +127,14 @@ sub getServiceIDsByNames {
   }
  } @_;
 }
+
+sub chkZObjExists {
+ my $zobjid=shift;
+ my $ltrs=join(''=>keys %ltr2zobj);
+ return undef unless my ($objType,$objID)=$zobjid=~m/^([${ltrs}])(\d{1,10})$/;
+ return scalar($ltr2zobj{$objType}{'check'}{'exists'}->($objID));
+}
+
 sub genITServicesTree  {
  my $parentSvc=shift;
  # No serviceid defined for parent node, we cant do anymore
