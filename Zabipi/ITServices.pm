@@ -12,13 +12,14 @@ use constant {
      IFACE_TYPE_SNMP=>2,
 };
 use Exporter qw(import);
-our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists);
+our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService);
 use DBI;
 use Data::Dumper;
 
 my %ltr2zobj=(
  'i'=>{ 'otype'=>'item',        'id_attr'=>'itemid',        'table'=>'items', 	 	'name'=>{'attr'=>'name'},  				},
+ 's'=>{ 'otype'=>'service',     'id_attr'=>'serviceid',     'table'=>'services', 	'name'=>{'attr'=>'name'},  				}, 
  't'=>{ 'otype'=>'trigger',     'id_attr'=>'triggerid',     'table'=>'triggers', 	'name'=>{'attr'=>'description'},			},
  'h'=>{ 'otype'=>'host',        'id_attr'=>'hostid',        'table'=>'hosts', 	 	'name'=>{'attr'=>[qw(host name)], 'fmt'=>'%s (%s)'}, 	},
  'g'=>{ 'otype'=>'hostgroup',   'id_attr'=>'groupid',       'table'=>'groups', 	 	'name'=>{'attr'=>'name'},				},
@@ -63,12 +64,17 @@ sub init {
                        :
     join(' '=>@res)    ;
   };
+  $zo->{'name'}{'update'}=sub {
+   my ($objid,$newName)=@_;
+   my $stRename=$dbh->prepare(sprintf('UPDATE %s SET %s=? WHERE %s=?', $zo->{'table'}, (ref($zo->{'name'}{'attr'})?$zo->{'name'}{'attr'}[0]:$zo->{'name'}{'attr'}), $zo->{'id_attr'}));
+   $stRename->execute($newName, $objid);
+  };
   my $st=$dbh->prepare(sprintf('SELECT 1 FROM %s WHERE %s=?', @{$zo}{'table','id_attr'}));
   $zo->{'check'}{'exists'}=sub {
    return undef unless $_[0]=~/^\d{1,10}$/;
    $st->execute(shift);
    $st->fetchrow_array()
-  }
+  };
  } 
  $flInitSuccess=1;
 }
@@ -112,6 +118,17 @@ sub doUnlinkITService {
 sub setAlgoITService {
  my ($serviceid,$newalgo)=@_;
  $sql_{'algochgSvc'}{'st'}->execute($newalgo,$serviceid);
+}
+
+sub doAssocITService {
+ my ($svcid,$zobjid)=@_;
+ return {'error'=>'No such Zabbix object'} unless chkZObjExists($zobjid);
+ return {'error'=>'No such IT Service'}	   unless $ltr2zobj{'s'}{'check'}{'exists'}->($svcid);
+ my $svcName=$ltr2zobj{'s'}{'name'}{'get'}->($svcid);
+ my $ltrs=join(''=>keys %ltr2zobj);
+ $svcName=~s%\s*\([${ltrs}]\d{1,10}\)$%%;
+ $svcName.=' ('.$zobjid.')';
+ $ltr2zobj{'s'}{'name'}{'update'}->($svcid,$svcName);
 }
 
 sub getServiceIDsByNames {
