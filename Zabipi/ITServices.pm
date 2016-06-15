@@ -13,7 +13,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService);
 use DBI;
 use Data::Dumper;
 
@@ -142,6 +142,13 @@ sub doAssocITService {
  $svcName=~s%\s*\([${ltrs}]\d{1,10}\)$%%;
  $svcName.=' ('.$zobjid.')';
  $ltr2zobj{'s'}{'name'}{'update'}->($svcid,$svcName);
+}
+
+sub doDeassocITService {
+ my $svcid=shift;
+ return {'error'=>'No such ITService'} unless my $svcName=$ltr2zobj{'s'}{'name'}{'get'}->($svcid);
+ $svcName=~s%${rxZOSfx}%%;
+ return {'result'=>$ltr2zobj{'s'}{'name'}{'update'}->($svcid,$svcName)};
 }
 
 sub getServiceIDsByNames {
