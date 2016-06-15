@@ -29,7 +29,8 @@ my %ltr2zobj=(
  'm'=>{ 'otype'=>'mediatype',   'id_attr'=>'mediatypeid',   'table'=>'media_type',	'name'=>{'attr'=>'description'},			},
  'M'=>{ 'otype'=>'media',       'id_attr'=>'mediaid',       'table'=>'media',		'name'=>{'attr'=>'sendto'}, 				},
 );
-
+my $rxZOPfxs=join ''=>keys %ltr2zobj;
+my $rxZOSfx=qr/\s*(\(([${rxZOPfxs}])(\d{1,10})\))$/;
 my %sql_=(
           'getSvcDeps'=>{
                                 'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
@@ -97,9 +98,20 @@ sub doMoveITService {
  $sql_{'mvSvc'}{'st'}->execute($where2place,$what2mv);
 }
 
+sub zobjFromSvcName {
+ ($_[0]=~$rxZOSfx)[wantarray?(1,2):(0)];
+}
+
 sub doRenameITService {
- my ($from,$to)=@_; 
- $sql_{'renSvcBy'.($from=~/[^\d]/?'Name':'ID')}{'st'}->execute($to,$from);
+ my ($from,$to)=@_;
+ my $flFromIsName=$from=~m/[^\d]/;
+ unless ($flFromIsName) {
+  return {'error'=>'No such IT Service'} unless my $svcName=$ltr2zobj{'s'}{'name'}{'get'}->($from);
+  if (my $zoSfx=zobjFromSvcName($svcName) and !zobjFromSvcName($to)) {
+   $to.=' '.$zoSfx;
+  }
+ }
+ $sql_{'renSvcBy'.($flFromIsName?'Name':'ID')}{'st'}->execute($to,$from);
 }
 
 sub doSymLinkITService {
