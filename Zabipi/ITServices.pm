@@ -122,8 +122,8 @@ sub setAlgoITService {
 
 sub doAssocITService {
  my ($svcid,$zobjid)=@_;
- return {'error'=>'No such Zabbix object'} unless chkZObjExists($zobjid);
- return {'error'=>'No such IT Service'}	   unless $ltr2zobj{'s'}{'check'}{'exists'}->($svcid);
+ return {'error'=>'No such Zabbix object: '.$zobjid} 	unless chkZObjExists($zobjid);
+ return {'error'=>'No such IT Service: '.$svcid}   	unless $ltr2zobj{'s'}{'check'}{'exists'}->($svcid);
  my $svcName=$ltr2zobj{'s'}{'name'}{'get'}->($svcid);
  my $ltrs=join(''=>keys %ltr2zobj);
  $svcName=~s%\s*\([${ltrs}]\d{1,10}\)$%%;
