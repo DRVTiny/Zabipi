@@ -38,7 +38,8 @@ my %sql_=(
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
-          'renSvc'	=>{ 	'rq'=>qq(update services set name=? where name=?),					},
+          'renSvcByName'=>{ 	'rq'=>qq(update services set name=? where name=?),					},
+          'renSvcByID'	=>{ 	'rq'=>qq(update services set name=? where serviceid=?),					},
           'unlinkSvc'	=>{	'rq'=>qq(delete from services_links where serviceupid=? and servicedownid=?),		},
           'algochgSvc'	=>{	'rq'=>qq(update services set algorithm=? where serviceid=?),				},
 );
@@ -97,8 +98,8 @@ sub doMoveITService {
 }
 
 sub doRenameITService {
- my ($fromName,$toName)=@_;
- $sql_{'renSvc'}{'st'}->execute($toName,$fromName);
+ my ($from,$to)=@_; 
+ $sql_{'renSvcBy'.($from=~/[^\d]/?'Name':'ID')}{'st'}->execute($to,$from);
 }
 
 sub doSymLinkITService {
