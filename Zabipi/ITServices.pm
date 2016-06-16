@@ -1,5 +1,5 @@
 package Monitoring::Zabipi::ITServices;
-use Monitoring::Zabipi qw(zbx zbx_get_dbhandle);
+use Monitoring::Zabipi qw(zbx zbx_get_dbhandle zbx_api_url);
 use v5.14.1;
 use constant {
      SLA_ALGO_DO_NOT_CALC=>0,
@@ -13,7 +13,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType);
 use DBI;
 use Data::Dumper;
 
@@ -81,6 +81,10 @@ sub init {
   };
  } 
  $flInitSuccess=1;
+}
+
+sub chkITServiceExists {
+ $ltr2zobj{'s'}{'check'}{'exists'}->(shift);
 }
 
 sub getITServiceChildren {
@@ -344,6 +348,25 @@ sub getAllITServiceDeps {
   )
  }
  getDepsRecursive(getITService(shift));
+}
+
+sub getITServiceDepsByType {
+ my ($rootSvcID,$typeLetter)=@_;
+ return {'error'=>'Wrong parameters passed'} unless $ltr2zobj{$typeLetter} and $rootSvcID=~m/^\d{1,10}$/;
+ return {'error'=>'Base ITService with the specified ID not found'} unless !$rootSvcID or chkITServiceExists($rootSvcID);
+ my ($ztype,$idattr)=@{$ltr2zobj{$typeLetter}}{qw(otype id_attr)};
+ return {'error'=>'You must properly initialize Zabbix API before passing base serviceid=0 to getITServiceDepsByType'} unless $rootSvcID or zbx_api_url;
+ my @svcs=$rootSvcID
+  ?
+ grep {defined($_->{'ztype'}) and $_->{'ztype'} eq $ztype} getAllITServiceDeps($rootSvcID)
+  :
+ grep defined $_, map {
+  $_->{'name'}=~s%^(.+)\s+\(${typeLetter}(\d+)\)$%$1%
+   ?do {
+     $_->{$idattr}=$2; $_
+    }
+   :undef
+ } @{zbx('service.get', {'search'=>{'name'=>"*(${typeLetter}*)"},'output'=>['name']})};
 }
 
 1;
