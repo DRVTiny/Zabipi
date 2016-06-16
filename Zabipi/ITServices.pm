@@ -147,8 +147,7 @@ sub doAssocITService {
 sub doDeassocITService {
  my $svcid=shift;
  return {'error'=>'No such ITService'} unless my $svcName=$ltr2zobj{'s'}{'name'}{'get'}->($svcid);
- $svcName=~s%${rxZOSfx}%%;
- return {'result'=>$ltr2zobj{'s'}{'name'}{'update'}->($svcid,$svcName)};
+ return {'result'=>($svcName=~s%${rxZOSfx}%%?$ltr2zobj{'s'}{'name'}{'update'}->($svcid,$svcName):-1)};
 }
 
 sub getServiceIDsByNames {
@@ -299,11 +298,17 @@ sub getITService4jsTree {
   }
  }
  $svc->{'text'}=sprintf('%s [%d]',@{$svc}{'name','serviceid'});
+ $svc->{'data'}={
+  'algo'=>$svc->{'algorithm'},
+ };
+ if (defined $svc->{'ztype'}) {
+  @{$svc->{'data'}}{map 'ZO_'.$_,qw(type id name)}=(ucfirst($svc->{'ztype'}), $zoid, $ltr2zobj{$zotype}{'name'}{'get'}->($zoid));
+ }
  $svc->{'a_attr'}={
   'title'=>join('; ' => 
-    'Service: id='.$svc->{'serviceid'}, 
+    sprintf('Service: id=%s algo=%s',@{$svc}{qw(serviceid algorithm)}),
     defined($svc->{'ztype'})?( 
-     sprintf('%s: id=%s name=%s', ucfirst($svc->{'ztype'}), $zoid, $ltr2zobj{$zotype}{'name'}{'get'}->($zoid))
+     sprintf('%s: id=%s name=%s', @{$svc->{'data'}}{map 'ZO_'.$_,qw(type id name)})
     ):()
   ),
  };
