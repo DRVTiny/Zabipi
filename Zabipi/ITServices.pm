@@ -1,5 +1,5 @@
 package Monitoring::Zabipi::ITServices;
-use Monitoring::Zabipi qw(zbx);
+use Monitoring::Zabipi qw(zbx zbx_get_dbhandle);
 use v5.14.1;
 use constant {
      SLA_ALGO_DO_NOT_CALC=>0,
@@ -13,7 +13,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren);
 use DBI;
 use Data::Dumper;
 
@@ -36,6 +36,7 @@ my %sql_=(
                                 'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
           },
           'getSvc'=>	{ 	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where serviceid=?), 	},
+          'getSvcChildren'=>{	'rq'=>qq(select c.serviceid,c.name,c.algorithm from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?),	},
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
@@ -49,7 +50,8 @@ my $flInitSuccess;
 
 sub init {
  my ($slf,$dbh)=@_;
- $dbh=$slf if ref($slf) eq 'DBI::db';
+ do { $dbh=$slf; $slf=undef } if ref($slf) eq 'DBI::db';
+ return undef unless ($dbh=$dbh || zbx_get_dbhandle);
  $_->{'st'}=$dbh->prepare($_->{'rq'}) for values %sql_;
  for my $zo (values %ltr2zobj) {
   $zo->{'name'}{'query'}=sprintf(
@@ -79,6 +81,12 @@ sub init {
   };
  } 
  $flInitSuccess=1;
+}
+
+sub getITServiceChildren {
+ my $svcid=shift || return undef;
+ $sql_{'getSvcChildren'}{'st'}->execute($svcid);
+ $sql_{'getSvcChildren'}{'st'}->fetchall_arrayref({});
 }
 
 sub doDeleteITService {
