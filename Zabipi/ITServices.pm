@@ -90,7 +90,8 @@ sub chkITServiceExists {
 sub getITServiceChildren {
  my $svcid=shift || return undef;
  $sql_{'getSvcChildren'}{'st'}->execute($svcid);
- $sql_{'getSvcChildren'}{'st'}->fetchall_arrayref({});
+ my @children=map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc) } @{$sql_{'getSvcChildren'}{'st'}->fetchall_arrayref({})};
+ return \@children;
 }
 
 sub doDeleteITService {
@@ -112,6 +113,14 @@ sub doMoveITService {
 
 sub zobjFromSvcName {
  ($_[0]=~$rxZOSfx)[wantarray?(1,2):(0)];
+}
+
+sub doITServiceAddZOAttrs {
+ my $svc=shift;
+ return undef unless ref($svc) eq 'HASH' and exists($svc->{'name'}) and exists($svc->{'serviceid'});
+ return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $zoid)=($2,$3);
+ @{$svc}{'ztype','zobjid',$ltr2zobj{$zoltr}{'id_attr'}}=($ltr2zobj{$zoltr}{'otype'},$zoid,$zoid); 
+ $svc
 }
 
 sub doRenameITService {
