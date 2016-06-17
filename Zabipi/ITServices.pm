@@ -89,7 +89,7 @@ sub chkITServiceExists {
 }
 
 sub getITServiceChildren {
- my $svcid=shift;
+ my ($svcid,$flResolveZOName)=@_;
  return undef if $svcid and $svcid=~/[^\d]/;
  my $st=$svcid?
   do {
@@ -100,7 +100,7 @@ sub getITServiceChildren {
    $sql_{'getRootSvcChildren'}{'st'}->execute();
    $sql_{'getRootSvcChildren'}{'st'}
   }; 
- return [map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc) } @{$st->fetchall_arrayref({})}];
+ return [map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc,$flResolveZOName) } @{$st->fetchall_arrayref({})}];
 }
 
 sub doDeleteITService {
