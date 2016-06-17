@@ -36,8 +36,9 @@ my %sql_=(
                                 'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
           },
           'getSvc'=>	{ 	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where serviceid=?), 	},
-          'getSvcChildren'=>{	'rq'=>qq(select c.serviceid,c.name,c.algorithm from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?),	},
-          'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},
+          'getSvcChildren'=>{	'rq'=>qq(select c.serviceid,c.name,c.algorithm from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?),	},          
+          'getRootSvcChildren'=>{ 'rq'=>qq(select s.serviceid,s.name,s.algorithm from services s left outer join services_links l on l.servicedownid=s.serviceid where l.servicedownid is null), },
+          'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
           'renSvcByName'=>{ 	'rq'=>qq(update services set name=? where name=?),					},
@@ -88,10 +89,18 @@ sub chkITServiceExists {
 }
 
 sub getITServiceChildren {
- my $svcid=shift || return undef;
- $sql_{'getSvcChildren'}{'st'}->execute($svcid);
- my @children=map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc) } @{$sql_{'getSvcChildren'}{'st'}->fetchall_arrayref({})};
- return \@children;
+ my $svcid=shift;
+ return undef if $svcid and $svcid=~/[^\d]/;
+ my $st=$svcid?
+  do {
+   $sql_{'getSvcChildren'}{'st'}->execute($svcid);
+   $sql_{'getSvcChildren'}{'st'}
+  }                 :
+  do {
+   $sql_{'getRootSvcChildren'}{'st'}->execute();
+   $sql_{'getRootSvcChildren'}{'st'}
+  }; 
+ return [map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc) } @{$st->fetchall_arrayref({})}];
 }
 
 sub doDeleteITService {
