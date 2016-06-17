@@ -131,9 +131,12 @@ sub doITServiceAddZOAttrs {
  return $svc unless my $hndlZO=$ltr2zobj{$zoltr} and chkZObjExists($zoltr.$oid);
  my $zotype=$hndlZO->{'otype'};
  @{$svc}{'ztype','zobjid',$hndlZO->{'id_attr'}}=($zotype,$oid,$oid);
- return $svc unless $flResolveZOName;
- $svc->{$zotype}{$hndlZO->{'name'}{'attr'}}=$hndlZO->{'name'}{'get'}->($oid);
- $svc->{$zotype}{$hndlZO->{'id_attr'}}=$oid;
+ unless ($flResolveZOName) {
+  $svc->{$hndlZO->{'id_attr'}}=$oid;
+ } else {
+  $svc->{$zotype}{$hndlZO->{'name'}{'attr'}}=$hndlZO->{'name'}{'get'}->($oid);
+  $svc->{$zotype}{$hndlZO->{'id_attr'}}=$oid;
+ }
  $svc
 }
 
