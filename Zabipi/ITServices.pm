@@ -130,7 +130,7 @@ sub doITServiceAddZOAttrs {
  return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $oid)=($2,$3);
  return $svc unless my $hndlZO=$ltr2zobj{$zoltr} and chkZObjExists($zoltr.$oid);
  my $zotype=$hndlZO->{'otype'};
- @{$svc}{'ztype','zobjid',$hndlZO->{'id_attr'}}=($zotype,$oid,$oid);
+ @{$svc}{'ztype','zobjid'}=($zotype,$oid,$oid);
  unless ($flResolveZOName) {
   $svc->{$hndlZO->{'id_attr'}}=$oid;
  } else {
