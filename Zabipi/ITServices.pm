@@ -13,7 +13,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs);
 use DBI;
 use Data::Dumper;
 
@@ -125,10 +125,15 @@ sub zobjFromSvcName {
 }
 
 sub doITServiceAddZOAttrs {
- my $svc=shift;
+ my ($svc,$flResolveZOName)=@_;
  return undef unless ref($svc) eq 'HASH' and exists($svc->{'name'}) and exists($svc->{'serviceid'});
- return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $zoid)=($2,$3);
- @{$svc}{'ztype','zobjid',$ltr2zobj{$zoltr}{'id_attr'}}=($ltr2zobj{$zoltr}{'otype'},$zoid,$zoid); 
+ return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $oid)=($2,$3);
+ return $svc unless my $hndlZO=$ltr2zobj{$zoltr} and chkZObjExists($zoltr.$oid);
+ my $zotype=$hndlZO->{'otype'};
+ @{$svc}{'ztype','zobjid',$hndlZO->{'id_attr'}}=($zotype,$oid,$oid);
+ return $svc unless $flResolveZOName;
+ $svc->{$zotype}{$hndlZO->{'name'}{'attr'}}=$hndlZO->{'name'}{'get'}->($oid);
+ $svc->{$zotype}{$hndlZO->{'id_attr'}}=$oid;
  $svc
 }
 
@@ -197,8 +202,8 @@ sub getServiceIDsByNames {
 sub chkZObjExists {
  my $zobjid=shift;
  my $ltrs=join(''=>keys %ltr2zobj);
- return undef unless my ($objType,$objID)=$zobjid=~m/^([${ltrs}])(\d{1,10})$/;
- return scalar($ltr2zobj{$objType}{'check'}{'exists'}->($objID));
+ return () unless my ($objType,$objID)=$zobjid=~m/^([${ltrs}])(\d{1,10})$/;
+ return $ltr2zobj{$objType}{'check'}{'exists'}->($objID)?($objType,$objID):();
 }
 
 sub genITServicesTree  {
