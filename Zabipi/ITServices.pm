@@ -281,11 +281,17 @@ sub getITService {
   $stGetDeps->execute($serviceid);
   if ( my @deps=map { return undef unless my $t=getITService($_); $t } @{$stGetDeps->fetchall_arrayref({})} ) {
 #   @deps=@deps>1?iterate_as_array(\&getSvc,\@deps):(getSvc($deps[0]));
-   my $lostFunK=0;
-   my $childLFKWeight=$svc->{'algorithm'}==2?(1/@deps):1;
-   $lostFunK+=$_*$childLFKWeight for grep $_, map $_->{'lostfunk'}, @deps;
-   $svc->{'lostfunk'}=$lostFunK>1?1:$lostFunK if $lostFunK;
+   if (my @ixTermDeps=grep { !exists $deps[$_]{'unfinished'} } 0..$#deps) {
+    my $lostFunK=0;
+    my $childLFKWeight=$svc->{'algorithm'}==SLA_ALGO_ALL_FOR_PROBLEM?(1/@ixTermDeps):1;
+    $lostFunK+=$_*$childLFKWeight for grep $_, map $deps[$_]{'lostfunk'}, @ixTermDeps;
+    $svc->{'lostfunk'}=$lostFunK>1?1:$lostFunK if $lostFunK;
+   } else {
+    $svc->{'unfinished'}=1;
+   }
    $svc->{'dependencies'}=\@deps;
+  } else {
+   $svc->{'unfinished'}=1;
   }
  }
  $cacheSvcTree{$serviceid}{'rflag'}=0;
@@ -326,13 +332,15 @@ sub getITService4jsTree {
   }  
   my $stGetDeps=$sql_{'getSvcDeps'}{'st'};
   $stGetDeps->execute($serviceid);
+# grep {! exists($_->{'unfinished'}) }
   if ( my @deps=map { return undef unless my $t=getITService4jsTree($_,@pars,$serviceid); $t } @{$stGetDeps->fetchall_arrayref({})} ) {
-#   @deps=@deps>1?iterate_as_array(\&getSvc,\@deps):(getSvc($deps[0]));
    my $lostFunK=0;
    my $childLFKWeight=$svc->{'algorithm'}==2?(1/@deps):1;
    $lostFunK+=$_*$childLFKWeight for grep $_, map $_->{'lostfunk'}, @deps;
    $svc->{'lostfunk'}=$lostFunK>1?1:$lostFunK if $lostFunK;
    $svc->{'children'}=\@deps;
+  } else {
+   $svc->{'unfinished'}=1;
   }
  }
  $svc->{'text'}=sprintf('%s [%d]',@{$svc}{'name','serviceid'});
