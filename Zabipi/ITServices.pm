@@ -1,6 +1,7 @@
 package Monitoring::Zabipi::ITServices;
 use Monitoring::Zabipi qw(zbx zbx_get_dbhandle zbx_api_url zbx_last_err);
 use v5.14.1;
+use utf8;
 use constant {
      SLA_ALGO_DO_NOT_CALC=>0,
      SLA_ALGO_ONE_FOR_PROBLEM=>1,
