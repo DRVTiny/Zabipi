@@ -1,5 +1,5 @@
 package Monitoring::Zabipi::ITServices;
-use Monitoring::Zabipi qw(zbx zbx_get_dbhandle zbx_api_url);
+use Monitoring::Zabipi qw(zbx zbx_get_dbhandle zbx_api_url zbx_last_err);
 use v5.14.1;
 use constant {
      SLA_ALGO_DO_NOT_CALC=>0,
@@ -13,7 +13,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs zobjFromSvcName);
 use DBI;
 use Data::Dumper;
 
@@ -36,6 +36,7 @@ my %sql_=(
                                 'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
           },
           'getSvc'=>	{ 	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where serviceid=?), 	},
+          'getSvcByZOExt' =>{	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where name like concat('% (',?,')')) },
           'getSvcChildren'=>{	'rq'=>qq(select c.serviceid,c.name,c.algorithm from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?),	},          
           'getRootSvcChildren'=>{ 'rq'=>qq(select s.serviceid,s.name,s.algorithm from services s left outer join services_links l on l.servicedownid=s.serviceid where l.servicedownid is null), },
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
@@ -45,6 +46,7 @@ my %sql_=(
           'renSvcByID'	=>{ 	'rq'=>qq(update services set name=? where serviceid=?),					},
           'unlinkSvc'	=>{	'rq'=>qq(delete from services_links where serviceupid=? and servicedownid=?),		},
           'algochgSvc'	=>{	'rq'=>qq(update services set algorithm=? where serviceid=?),				},
+          'checkHostEnabled'=>{	'rq'=>qq(select if(maintenance_status=1 or status=1,0,1) flHostMonStatus from hosts where hostid=?)	},
 );
 
 my $flInitSuccess;
@@ -120,8 +122,13 @@ sub doMoveITService {
  $sql_{'mvSvc'}{'st'}->execute($where2place,$what2mv);
 }
 
-sub zobjFromSvcName {
- ($_[0]=~$rxZOSfx)[wantarray?(1,2):(0)];
+sub zobjFromSvcName { 
+ if (ref $_[0] eq 'SCALAR') {
+  ${$_[0]}=~s%${rxZOSfx}%%;
+  return wantarray?($2,$3):$1
+ } else {
+  return ($_[0]=~$rxZOSfx)[wantarray?(1,2):(0)]  
+ }
 }
 
 sub doITServiceAddZOAttrs {
@@ -217,22 +224,37 @@ sub genITServicesTree  {
  # No child nodes, exit normally 
  return 1 		unless defined $childNodes and ref($childNodes) eq 'HASH' and %{$childNodes}; 
  my $errc=0;
+ my @out;
  while (my ($svcName,$svcNode)=each %{$childNodes}) {
-  my %svcSettings=(
-   'algorithm'	=>	SLA_ALGO_ALL_FOR_PROBLEM,
-   'showsla'	=>	SHOW_SLA_CALC,
-   'goodsla'	=>	DEFAULT_GOOD_SLA,
-   'sortorder'	=>	0,
-  );
-  my @k=('triggerid',grep defined($svcSettings{$_}),keys %{$svcNode});
-  @svcSettings{@k}=@{$svcNode}{@k} if @k;
-  if ($svcNode->{'serviceid'}=eval { zbx('service.create',{'name'=>$svcName, 'parentid'=>$parSvcID, %svcSettings})->{'serviceids'}[0] } and defined($svcNode->{'nodes'})) {
-   genITServicesTree($svcNode)
+  my $svcid=$svcNode->{'serviceid'};  
+  if ($svcNode->{'serviceid'}||=do {
+   my %svcSettings=(
+    'algorithm'	=>	SLA_ALGO_ALL_FOR_PROBLEM,
+    'showsla'	=>	SHOW_SLA_CALC,
+    'goodsla'	=>	DEFAULT_GOOD_SLA,
+    'sortorder'	=>	0,
+   );
+   # Hint: 'triggerid' is absent in %svcSettings, so we need to explicitly put it in @k
+   my @k=(
+    'triggerid',
+    grep defined($svcSettings{$_}), keys %{$svcNode}
+   );
+   @svcSettings{@k}=@{$svcNode}{@k} if @k;   
+   eval { 
+    zbx('service.create',{
+     'name'=>$svcName,
+     'parentid'=>$parSvcID,
+     %svcSettings
+    })->{'serviceids'}[0] 
+   }
+  }) {
+   push @out, ( $svcNode->{'serviceid'}=>{'state'=>0,'msg'=>$svcid?'Exists':'Created'} ),
+              ( $svcNode->{'nodes'}?genITServicesTree($svcNode):() );
   } else {
-   $errc++
+   push @out, ( $svcNode->{'serviceid'}=>{'state'=>1, 'msg'=>zbx_last_err()} )
   }
  } # <- for each child node
- return $errc?undef:0;
+ return @out;
 } # <- sub genITServicesTree($parentNode)
 
 sub getITServiceAPI {
@@ -244,6 +266,12 @@ sub getITServiceAPI {
   delete $$refDep->{'triggerid'} unless $$refDep->{'triggerid'};
  }
  return scalar($#{$childSvcs}?$childSvcs:$childSvcs->[0])
+}
+
+sub getITServicesAssociatedWith {
+ my $zobjid=shift;
+ $sql_{'getSvcByZOExt'}{'st'}->execute($zobjid);
+ return $sql_{'getSvcByZOExt'}{'st'}->fetchall_arrayref({});
 }
 
 my %cacheSvcTree;
@@ -260,6 +288,7 @@ sub getITService {
  my $serviceid=$svc->{'serviceid'};
  return undef if $cacheSvcTree{$serviceid}{'rflag'};
  return $cacheSvcTree{$serviceid}{'obj'} if $cacheSvcTree{$serviceid}{'obj'};
+ my ($zoType,$zoID)=zobjFromSvcName($svc->{'name'});
  $cacheSvcTree{$serviceid}{'rflag'}=1;
  utf8::decode($svc->{'name'});
  if ($svc->{'triggerid'}) {
@@ -270,28 +299,39 @@ sub getITService {
   my $trg=$stGetTrg->fetchall_arrayref({})->[0];
   $svc->{'lostfunk'}=($trg->{'priority'}-1)/4 if $trg->{'value'} and !$trg->{'status'} and $trg->{'priority'}>1;  
  } else {
-  if ($svc->{'name'}=~s%(?:\s+|^)\(([a-zA-Z])(\d{1,10})\)$%% and defined $ltr2zobj{$1}) {
-   my ($zotype,$zoid)=($1,$2);
-   $svc->{'ztype'}=$ltr2zobj{$zotype}{'otype'};
-   $svc->{'zobjid'}=$zoid;
-   $svc->{$ltr2zobj{$zotype}{'id_attr'}}=$zoid;
+  if ( my ($zoType,$zoID)=zobjFromSvcName(\$svc->{'name'}) ) {
+   if ($zoType eq 't') {
+    $svc->{'invalid'}=1;
+    return $svc
+   }
+   if ( defined(my $zoDscrByType=$ltr2zobj{$zoType}) ) {
+    $svc->{'ztype'}=$zoDscrByType->{'otype'};
+    $svc->{'zobjid'}=$zoID;
+    $svc->{$zoDscrByType->{'id_attr'}}=$zoID;
+   }
   }
   delete $svc->{'triggerid'};
-  my $stGetDeps=$sql_{'getSvcDeps'}{'st'};
-  $stGetDeps->execute($serviceid);
-  if ( my @deps=map { return undef unless my $t=getITService($_); $t } @{$stGetDeps->fetchall_arrayref({})} ) {
-#   @deps=@deps>1?iterate_as_array(\&getSvc,\@deps):(getSvc($deps[0]));
-   if (my @ixTermDeps=grep { !exists $deps[$_]{'unfinished'} } 0..$#deps) {
-    my $lostFunK=0;
-    my $childLFKWeight=$svc->{'algorithm'}==SLA_ALGO_ALL_FOR_PROBLEM?(1/@ixTermDeps):1;
-    $lostFunK+=$_*$childLFKWeight for grep $_, map $deps[$_]{'lostfunk'}, @ixTermDeps;
-    $svc->{'lostfunk'}=$lostFunK>1?1:$lostFunK if $lostFunK;
+  if ($zoType eq 'h') {
+   $sql_{'checkHostEnabled'}{'st'}->execute($zoID);
+   @{$svc}{'disabled','unfinished'}=(1,1) unless $sql_{'checkHostEnabled'}{'st'}->fetchall_arrayref([])->[0][0];
+  }
+  unless (exists $svc->{'disabled'}) {
+   my $stGetDeps=$sql_{'getSvcDeps'}{'st'};
+   $stGetDeps->execute($serviceid);
+   if ( my @deps=grep { !exists $_->{'invalid'} } map { return undef unless my $t=getITService($_); $t } @{$stGetDeps->fetchall_arrayref({})} ) {
+ #   @deps=@deps>1?iterate_as_array(\&getSvc,\@deps):(getSvc($deps[0]));
+    if (my @ixTermDeps=grep { !exists $deps[$_]{'unfinished'} } 0..$#deps) {
+     my $lostFunK=0;
+     my $childLFKWeight=$svc->{'algorithm'}==SLA_ALGO_ALL_FOR_PROBLEM?(1/@ixTermDeps):1;
+     $lostFunK+=$_*$childLFKWeight for grep $_, map $deps[$_]{'lostfunk'}, @ixTermDeps;
+     $svc->{'lostfunk'}=$lostFunK>1?1:$lostFunK if $lostFunK;
+    } else {
+     $svc->{'unfinished'}=1;
+    }
+    $svc->{'dependencies'}=\@deps;
    } else {
     $svc->{'unfinished'}=1;
-   }
-   $svc->{'dependencies'}=\@deps;
-  } else {
-   $svc->{'unfinished'}=1;
+   }  
   }
  }
  $cacheSvcTree{$serviceid}{'rflag'}=0;
