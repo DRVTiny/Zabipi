@@ -14,7 +14,7 @@ use constant {
 };
 use Exporter qw(import);
 our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService getITServicesAssociatedWith);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs zobjFromSvcName getITServicesAssociatedWith);
+our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs zobjFromSvcName getITServicesAssociatedWith getITServiceIDByName);
 use DBI;
 use Data::Dumper;
 
@@ -43,6 +43,8 @@ my %sql_=(
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
+          'getSvcByNameAndParent'=>{ 'rq'=>qq(select s.serviceid from services s inner join services_links sl on s.serviceid=sl.servicedownid where s.name=? and sl.serviceupid=?), },
+          'getSvcByNameUnderRoot'=>{ 'rq'=>qq(select s.serviceid from services s left join  services_links sl on s.serviceid=sl.servicedownid where s.name=? and sl.serviceupid is null), },
           'renSvcByName'=>{ 	'rq'=>qq(update services set name=? where name=?),					},
           'renSvcByID'	=>{ 	'rq'=>qq(update services set name=? where serviceid=?),					},
           'unlinkSvc'	=>{	'rq'=>qq(delete from services_links where serviceupid=? and servicedownid=?),		},
@@ -267,6 +269,16 @@ sub getITServiceAPI {
   delete $$refDep->{'triggerid'} unless $$refDep->{'triggerid'};
  }
  return scalar($#{$childSvcs}?$childSvcs:$childSvcs->[0])
+}
+
+sub getITServiceIDByName {
+ my @names=ref($_[0]) eq 'ARRAY'?@{$_[0]}:do { my @snh=split /\//,$_[0]; shift @snh if $snh[0] eq ''; @snh };
+ my $parSvcID=$_[1];
+# say "names=".join(','=>@names)." parsvc=".($parSvcID?$parSvcID:'<ROOT>');
+ my $st=$sql_{'getSvcByName'.($parSvcID?'AndParent':'UnderRoot')}{'st'};
+ $st->execute(scalar(shift @names),($parSvcID?$parSvcID:()));
+ return undef unless my $svc=$st->fetchall_arrayref([])->[0];
+ return @names?getITServiceIDByName(\@names,$svc->[0]):$svc->[0];
 }
 
 sub getITServicesAssociatedWith {
