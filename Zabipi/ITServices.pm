@@ -12,12 +12,6 @@ use constant {
      IFACE_TYPE_ZABBIX_AGENT=>1,
      IFACE_TYPE_SNMP=>2,
 };
-use Exporter qw(import);
-our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService getITServicesAssociatedWith);
-our @EXPORT=qw(doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs zobjFromSvcName getITServicesAssociatedWith getITServiceIDByName);
-use DBI;
-use Data::Dumper;
-
 my %ltr2zobj=(
  'i'=>{ 'otype'=>'item',        'id_attr'=>'itemid',        'table'=>'items', 	 	'name'=>{'attr'=>'name'},  				},
  's'=>{ 'otype'=>'service',     'id_attr'=>'serviceid',     'table'=>'services', 	'name'=>{'attr'=>'name'},  				}, 
@@ -30,8 +24,17 @@ my %ltr2zobj=(
  'm'=>{ 'otype'=>'mediatype',   'id_attr'=>'mediatypeid',   'table'=>'media_type',	'name'=>{'attr'=>'description'},			},
  'M'=>{ 'otype'=>'media',       'id_attr'=>'mediaid',       'table'=>'media',		'name'=>{'attr'=>'sendto'}, 				},
 );
-my $rxZOPfxs=join ''=>keys %ltr2zobj;
+our $rxZOPfxs=join ''=>keys %ltr2zobj;
 my $rxZOSfx=qr/\s*(\(([${rxZOPfxs}])(\d{1,10})\))$/;
+
+use Exporter qw(import);
+our @EXPORT_OK=qw(doDeleteITService genITServicesTree getITService getAllITServiceDeps doMoveITService getServiceIDsByNames doSymLinkITService chkZObjExists doAssocITService getITServicesAssociatedWith);
+our @EXPORT=qw($rxZOPfxs doDeleteITService doMoveITService doRenameITService getITService getITService4jsTree genITServicesTree getServiceIDsByNames doSymLinkITService doUnlinkITService getITSCache setAlgoITService chkZObjExists doAssocITService doDeassocITService getITServiceChildren getITServiceDepsByType doITServiceAddZOAttrs zobjFromSvcName getITServicesAssociatedWith getITServiceIDByName);
+
+use DBI;
+use Data::Dumper;
+
+
 my %sql_=(
           'getSvcDeps'=>{
                                 'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
@@ -43,8 +46,8 @@ my %sql_=(
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
-          'getSvcByNameAndParent'=>{ 'rq'=>qq(select s.serviceid from services s inner join services_links sl on s.serviceid=sl.servicedownid where s.name=? and sl.serviceupid=?), },
-          'getSvcByNameUnderRoot'=>{ 'rq'=>qq(select s.serviceid from services s left join  services_links sl on s.serviceid=sl.servicedownid where s.name=? and sl.serviceupid is null), },
+          'getSvcByNameAndParent'=>{ 'rq'=>qq(select s.serviceid from services s inner join services_links sl on s.serviceid=sl.servicedownid where s.name regexp concat('^',?,'( \\\\([${rxZOPfxs}][0-9]+\\\\))?\$') and sl.serviceupid=?      ), },
+          'getSvcByNameUnderRoot'=>{ 'rq'=>qq(select s.serviceid from services s left  join services_links sl on s.serviceid=sl.servicedownid where s.name regexp concat('^',?,'( \\\\([${rxZOPfxs}][0-9]+\\\\))?\$') and sl.serviceupid is null), },
           'renSvcByName'=>{ 	'rq'=>qq(update services set name=? where name=?),					},
           'renSvcByID'	=>{ 	'rq'=>qq(update services set name=? where serviceid=?),					},
           'unlinkSvc'	=>{	'rq'=>qq(delete from services_links where serviceupid=? and servicedownid=?),		},
