@@ -62,13 +62,17 @@ sub init {
  do { $dbh=$slf; $slf=undef } if ref($slf) eq 'DBI::db';
  return undef unless ($dbh=$dbh || zbx_get_dbhandle);
  $_->{'st'}=$dbh->prepare($_->{'rq'}) for values %sql_;
+
  for my $zo (values %ltr2zobj) {
-  $zo->{'name'}{'query'}=sprintf(
-   'SELECT %s FROM %s WHERE %s=?',
-    ( (ref($zo->{'name'}{'attr'}) eq 'ARRAY')?join(','=>@{$zo->{'name'}{'attr'}}):$zo->{'name'}{'attr'} ),
-    @{$zo}{'table','id_attr'},
-  );
-  $zo->{'name'}{'st'}=$dbh->prepare($zo->{'name'}{'query'});
+  my @zoNameAttrs=(ref($zo->{'name'}{'attr'}) eq 'ARRAY')?join(','=>@{$zo->{'name'}{'attr'}}):($zo->{'name'}{'attr'});
+  for my $what ('name','zobj') {
+   my $query=$zo->{$what}{'query'}=sprintf(
+    'SELECT %s FROM %s WHERE %s=?',
+     join(','=>@zoNameAttrs,$what eq 'zobj'?($zo->{'id_attr'}):()),
+     @{$zo}{'table','id_attr'},
+   );
+   $zo->{$what}{'st'}=$dbh->prepare($query);
+  }
   $zo->{'name'}{'get'}=sub {
    $zo->{'name'}{'st'}->execute(shift);
    my @res=map {utf8::decode($_); $_} @{$zo->{'name'}{'st'}->fetchall_arrayref([])->[0]};
@@ -76,6 +80,12 @@ sub init {
     sprintf($zo->{'name'}{'fmt'}, @res)
                        :
     join(' '=>@res)    ;
+  };
+  $zo->{'zobj'}{'get'}=sub {
+   $zo->{'zobj'}{'st'}->execute(shift);
+   return {} unless my $zobj=$zo->{'zobj'}{'st'}->fetchall_arrayref({})->[0];
+   utf8::decode($zobj->{$_}) for @zoNameAttrs;
+   return $zobj;
   };
   $zo->{'name'}{'update'}=sub {
    my ($objid,$newName)=@_;
@@ -147,10 +157,9 @@ sub doITServiceAddZOAttrs {
  unless ($flResolveZOName) {
   $svc->{$hndlZO->{'id_attr'}}=$oid;
  } else {
-  $svc->{$zotype}{$hndlZO->{'name'}{'attr'}}=$hndlZO->{'name'}{'get'}->($oid);
-  $svc->{$zotype}{$hndlZO->{'id_attr'}}=$oid;
+  $svc->{$zotype}=$hndlZO->{'zobj'}{'get'}->($oid);
  }
- $svc
+ return $svc;
 }
 
 sub doRenameITService {
