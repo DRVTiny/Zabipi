@@ -77,7 +77,6 @@ sub init {
    ?($_->{'rq'}=sprintf($_->{'rq'}[0],@{$_->{'rq'}}[1..$#{$_->{'rq'}}]))
    :(ref($_->{'rq'})?confess('Incorrectly filled %sql_ detected'):$_->{'rq'})
  ) for values %sql_;
- print Dumper \%sql_;
  for my $zo (values %ltr2zobj) {
   my @zoNameAttrs=(ref($zo->{'name'}{'attr'}) eq 'ARRAY')?@{$zo->{'name'}{'attr'}}:($zo->{'name'}{'attr'});
   for my $what ('name','zobj') {
