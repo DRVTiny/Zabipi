@@ -110,13 +110,15 @@ sub chkITServiceExists {
 
 sub getITServiceChildren {
  my ($svcid,$flResolveZOName)=@_;
- return undef if $svcid and $svcid=~/[^\d]/;
+# Return if svcid defined, but contains anything "non-numeric" 
+ return if $svcid and $svcid=~/[^\d]/;
  my $st=$svcid?
   do {
    $sql_{'getSvcChildren'}{'st'}->execute($svcid);
    $sql_{'getSvcChildren'}{'st'}
   }                 :
   do {
+# Special case: svcid can be "0". It is fake serviceid appropriate to non-existing "<Common Root>" service
    $sql_{'getRootSvcChildren'}{'st'}->execute();
    $sql_{'getRootSvcChildren'}{'st'}
   }; 
