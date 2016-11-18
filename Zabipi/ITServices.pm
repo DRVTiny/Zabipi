@@ -33,16 +33,27 @@ our @EXPORT=qw($rxZOPfxs doDeleteITService doMoveITService doRenameITService get
 
 use DBI;
 use Data::Dumper;
+use Carp qw(confess);
 
+my @itsvcAttrs=qw(serviceid name algorithm triggerid showsla);
+sub getSQLSvcAttrs {
+ if (my $tbl=shift) {
+  return join(','=>map $tbl.'.'.$_, @itsvcAttrs)
+ } else {
+  return join(','=>@itsvcAttrs)
+ }
+}
 
 my %sql_=(
           'getSvcDeps'=>{
-                                'rq'=>qq(select s.serviceid,s.name,s.algorithm,s.triggerid from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?),
+                                'rq'=>[qq(select %s from services s inner join services_links l on s.serviceid=l.servicedownid where l.serviceupid=?), getSQLSvcAttrs('s')]
           },
-          'getSvc'=>	{ 	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where serviceid=?), 	},
-          'getSvcByZOExt' =>{	'rq'=>qq(select serviceid,name,algorithm,triggerid from services where name like concat('% (',?,')')) },
-          'getSvcChildren'=>{	'rq'=>qq(select c.serviceid,c.name,c.algorithm from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?),	},          
-          'getRootSvcChildren'=>{ 'rq'=>qq(select s.serviceid,s.name,s.algorithm from services s left outer join services_links l on l.servicedownid=s.serviceid where l.servicedownid is null), },
+          'getSvc'=>	{ 	'rq'=>[qq(select %s from services where serviceid=?),getSQLSvcAttrs()] 	},
+          'getSvcByZOExt' =>{	'rq'=>[qq(select %s from services where name like concat('% (',?,')')), getSQLSvcAttrs()] },
+          'getSvcChildren'=>{	'rq'=>[qq(select %s from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?), getSQLSvcAttrs('c')] },
+          'getRootSvcChildren'=>{ 
+                                'rq'=>[qq(select %s from services s left outer join services_links l on l.servicedownid=s.serviceid where l.servicedownid is null), getSQLSvcAttrs('s')]
+          },
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
           'getSvcByName'=>{ 	'rq'=>qq(select serviceid from services where name=?),					},
@@ -58,11 +69,15 @@ my %sql_=(
 my $flInitSuccess;
 
 sub init {
- my ($slf,$dbh)=@_;
+ my ($slf,$dbh)=@_; 
  do { $dbh=$slf; $slf=undef } if ref($slf) eq 'DBI::db';
  return undef unless ($dbh=$dbh || zbx_get_dbhandle);
- $_->{'st'}=$dbh->prepare($_->{'rq'}) for values %sql_;
-
+ $_->{'st'}=$dbh->prepare(
+  ref($_->{'rq'}) eq 'ARRAY'
+   ?($_->{'rq'}=sprintf($_->{'rq'}[0],@{$_->{'rq'}}[1..$#{$_->{'rq'}}]))
+   :(ref($_->{'rq'})?confess('Incorrectly filled %sql_ detected'):$_->{'rq'})
+ ) for values %sql_;
+ print Dumper \%sql_;
  for my $zo (values %ltr2zobj) {
   my @zoNameAttrs=(ref($zo->{'name'}{'attr'}) eq 'ARRAY')?@{$zo->{'name'}{'attr'}}:($zo->{'name'}{'attr'});
   for my $what ('name','zobj') {
