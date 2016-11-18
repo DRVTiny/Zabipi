@@ -64,7 +64,7 @@ sub init {
  $_->{'st'}=$dbh->prepare($_->{'rq'}) for values %sql_;
 
  for my $zo (values %ltr2zobj) {
-  my @zoNameAttrs=(ref($zo->{'name'}{'attr'}) eq 'ARRAY')?join(','=>@{$zo->{'name'}{'attr'}}):($zo->{'name'}{'attr'});
+  my @zoNameAttrs=(ref($zo->{'name'}{'attr'}) eq 'ARRAY')?@{$zo->{'name'}{'attr'}}:($zo->{'name'}{'attr'});
   for my $what ('name','zobj') {
    my $query=$zo->{$what}{'query'}=sprintf(
     'SELECT %s FROM %s WHERE %s=?',
