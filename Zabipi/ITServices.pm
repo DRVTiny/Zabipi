@@ -84,7 +84,9 @@ sub init {
   $zo->{'zobj'}{'get'}=sub {
    $zo->{'zobj'}{'st'}->execute(shift);
    return {} unless my $zobj=$zo->{'zobj'}{'st'}->fetchall_arrayref({})->[0];
-   utf8::decode($zobj->{$_}) for @zoNameAttrs;
+   for (@zoNameAttrs) {
+    utf8::decode($zobj->{$_}) unless utf8::is_utf8($zobj->{$_});
+   }
    return $zobj;
   };
   $zo->{'name'}{'update'}=sub {
@@ -118,7 +120,7 @@ sub getITServiceChildren {
    $sql_{'getRootSvcChildren'}{'st'}->execute();
    $sql_{'getRootSvcChildren'}{'st'}
   }; 
- return [map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc,$flResolveZOName) } @{$st->fetchall_arrayref({})}];
+ return [map { my $chldSvc=$_; utf8::decode($chldSvc->{'name'}) unless utf8::is_utf8($chldSvc->{'name'}); doITServiceAddZOAttrs($chldSvc,$flResolveZOName) } @{$st->fetchall_arrayref({})}];
 }
 
 sub doDeleteITService {
