@@ -52,7 +52,7 @@ my %sql_=(
           'getSvcByZOExt' =>{	'rq'=>[qq(select %s from services where name like concat('% (',?,')')), getSQLSvcAttrs()] },
           'getSvcChildren'=>{	'rq'=>[qq(select %s from services_links l inner join services c on l.servicedownid=c.serviceid and l.serviceupid=?), getSQLSvcAttrs('c')] },
           'getRootSvcChildren'=>{ 
-                                'rq'=>[qq(select %s from services s left outer join services_links l on l.servicedownid=s.serviceid where l.servicedownid is null), getSQLSvcAttrs('s')]
+                                'rq'=>[qq(select %s from services s left outer join services_links l on l.servicedownid=s.serviceid and l.soft=0 where l.servicedownid is null), getSQLSvcAttrs('s')]
           },
           'getTrg'=>	{ 	'rq'=>qq(select priority,value,status from triggers where triggerid=?),			},          
           'mvSvc'=>	{ 	'rq'=>qq(update services_links set serviceupid=? where servicedownid=?), 		},
