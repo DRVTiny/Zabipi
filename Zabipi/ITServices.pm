@@ -169,6 +169,7 @@ sub doITServiceAddZOAttrs {
  my ($svc,$flResolveZOName)=@_;
  return undef unless ref($svc) eq 'HASH' and exists($svc->{'name'}) and exists($svc->{'serviceid'});
  return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $oid)=($2,$3);
+ @{$svc}{'ztype','zoid'}=($zoltr, $oid);
  return $svc unless my $hndlZO=$ltr2zobj{$zoltr} and chkZObjExists($zoltr.$oid);
  my $zotype=$hndlZO->{'otype'};
  @{$svc}{'ztype','zobjid'}=($zotype,$oid,$oid);
