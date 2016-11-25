@@ -97,7 +97,7 @@ sub init {
   };
   $zo->{'zobj'}{'get'}=sub {
    $zo->{'zobj'}{'st'}->execute(shift);
-   return {} unless my $zobj=$zo->{'zobj'}{'st'}->fetchall_arrayref({})->[0];
+   return unless my $zobj=$zo->{'zobj'}{'st'}->fetchall_arrayref({})->[0];
    for (@zoNameAttrs) {
     utf8::decode($zobj->{$_}) unless utf8::is_utf8($zobj->{$_});
    }
@@ -168,16 +168,17 @@ sub zobjFromSvcName {
 sub doITServiceAddZOAttrs {
  my ($svc,$flResolveZOName)=@_;
  return undef unless ref($svc) eq 'HASH' and exists($svc->{'name'}) and exists($svc->{'serviceid'});
- return $svc unless $svc->{'name'}=~s%${rxZOSfx}%% and my ($zoltr, $oid)=($2,$3);
- @{$svc}{'ztype','zoid'}=($zoltr, $oid);
- return $svc unless my $hndlZO=$ltr2zobj{$zoltr} and chkZObjExists($zoltr.$oid);
- my $zotype=$hndlZO->{'otype'};
- @{$svc}{'ztype','zobjid'}=($zotype,$oid,$oid);
- unless ($flResolveZOName) {
-  $svc->{$hndlZO->{'id_attr'}}=$oid;
- } else {
-  $svc->{$zotype}=$hndlZO->{'zobj'}{'get'}->($oid);
- }
+ my ($zoltr, $oid)=$svc->{'triggerid'}
+  ?  ('t',$svc->{'triggerid'})
+  : do {
+     return $svc unless $svc->{'name'}=~s%${rxZOSfx}%%;
+     ($2,$3)
+    };
+ my $hndlZO=$ltr2zobj{$zoltr};
+ @{$svc}{'ztype','zobjid'}=($hndlZO->{'otype'},$oid);
+ return $svc unless my $zobj=$hndlZO->{'zobj'}{'get'}->($oid);
+ $svc->{$hndlZO->{'id_attr'}}=$oid;
+ $svc->{'zobj'}=$zobj if $flResolveZOName;
  return $svc;
 }
 
