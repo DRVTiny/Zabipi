@@ -358,7 +358,14 @@ sub getITService {
   delete $svc->{'triggerid'};
   if ($zoType eq 'h') {
    $sql_{'checkHostEnabled'}{'st'}->execute($zoID);
-   @{$svc}{'disabled','unfinished'}=(1,1) unless $sql_{'checkHostEnabled'}{'st'}->fetchall_arrayref([])->[0][0];
+   unless (my $hostStatus=$sql_{'checkHostEnabled'}{'st'}->fetchall_arrayref([])->[0][0]) {
+    $svc->{'unfinished'}=1;
+    if (defined $hostStatus) {
+     $svc->{'disabled'}=1
+    } else {
+     delete $svc->{'hostid'}
+    }
+   }
   }
   unless (exists $svc->{'disabled'}) {
    my $stGetDeps=$sql_{'getSvcDeps'}{'st'};
@@ -471,8 +478,10 @@ sub getAllITServiceDeps {
 
 sub getITServiceDepsByType {
  my ($rootSvcID,$typeLetter)=@_;
- return {'error'=>'Wrong parameters passed'} unless $ltr2zobj{$typeLetter} and $rootSvcID=~m/^\d{1,10}$/;
- return {'error'=>'Base ITService with the specified ID not found'} unless !$rootSvcID or chkITServiceExists($rootSvcID);
+ return {'error'=>'Wrong parameters passed'} 
+  unless $ltr2zobj{$typeLetter} and $rootSvcID=~m/^\d{1,10}$/;
+ return {'error'=>'Base ITService with the specified ID not found'}
+  unless !$rootSvcID or chkITServiceExists($rootSvcID);
  my ($ztype,$idattr)=@{$ltr2zobj{$typeLetter}}{qw(otype id_attr)};
  return {'error'=>'You must properly initialize Zabbix API before passing base serviceid=0 to getITServiceDepsByType'} unless $rootSvcID or zbx_api_url;
  my @svcs=$rootSvcID
