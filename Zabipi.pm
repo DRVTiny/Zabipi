@@ -33,7 +33,9 @@ sub queue_get;
 sub zbx_get_dbhandle;
 sub fillHashInd;
 
-our @EXPORT_OK=qw(new zbx zbx_last_err zbx_json_raw zbx_api_url zbx_api_version zbx_get_dbhandle);
+
+our @EXPORT_OK=qw(zbx zbx_set_cookie zbx_last_err zbx_json_raw zbx_api_url zbx_api_version zbx_get_dbhandle);
+our @EXPORT=@EXPORT_OK;
 
 use constant {
         DEFAULT_ITEM_DELAY=>30,
@@ -65,6 +67,7 @@ my %rx=(
 
 my %Cmd2APIMethod=(
         'auth'             => 'user.authenticate',
+        'cookieAuth'	   => 'user.checkAuthentication',
         'getVersion'       => 'apiinfo.version',
         'logout'           => 'user.logout',
         'searchHostByName' => 'host.get',
@@ -96,6 +99,8 @@ my %MethodPars = (
         },
 );
 $MethodPars{'user.authenticate'}=$MethodPars{'user.login'};
+
+my $oCookies;
 
 sub cnfPar2cnfKey_syn2orig {
  my $v=shift;
@@ -376,6 +381,22 @@ my %APIPatcher=(
  },  
 );
 
+sub zbx_set_cookie {
+ do {
+  setErr 'You must provide cookie file path to zbx_set_cookie() function';
+  return
+ } unless defined(my $cookieFile=shift);
+ if ( -e $cookieFile and !( -f $cookieFile and -r $cookieFile ) ) {
+  setErr 'Unreadable cookie file';
+  return
+ }   
+ unless ($oCookies=HTTP::Cookies->new('file'=>$cookieFile,'autosave'=>1)) {
+  setErr 'Cant create HTTP::Cookies object based on your cookie file. Check that it contains valid cookie data';
+  return
+ }
+ $_->cookie_jar($oCookies) if $_=$UserAgent{'reqObj'};
+}
+
 # zbx internally doing some nasty things such as:
 # POST $url {"jsonrpc": "2.0","method":"user.authenticate","params":{"user":"Admin","password":"zabbix"},"auth": null,"id":0}
 sub zbx {
@@ -383,30 +404,30 @@ sub zbx {
  my ($req,$rslt,%flags);
  unless ( $Config{'apiVersion'} ) {
   print STDERR 'API not initialized yet, use "new" method with the correct parameters and check its return code',"\n" unless $what2do eq 'logout';
-  return 0
+  return
  }
  my $ua=$UserAgent{'reqObj'};
  unless ($Config{'apiUrl'} and ref($ua) eq 'LWP::UserAgent') {
   print STDERR "You must use 'new' constructor first and define some mandatory configuration parameters, such as URL pointing to server-side ZabbixAPI handler\n";
-  return 0
+  return
  }
  do {
   setErr "Unknown operation requested: $what2do";
-  return 0
- } unless my $method=$what2do=~m/^[a-z]+?\.[a-z]+$/?$what2do:$Cmd2APIMethod{$what2do};
+  return
+ } unless my $method=$what2do=~m/^[a-z]+?\.[a-zA-Z]+$/?$what2do:$Cmd2APIMethod{$what2do};
  
  my $mp=$MethodPars{$method};
  
  unless ($Config{'authToken'} or $mp->{'noauth'}) {
   setErr "You must be authorized first. Use 'auth' before try to '$what2do'";
-  return 0
+  return
  } 
  
  if ( $mp->{'webcall'} ) {
   my $uriEnc=URI::Encode->new({'encode_reserved'=>1});
   unless ($Config{'flWebLoginSuccess'}) {
-   return 0 unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$uriEnc->encode($SavedCreds{'passwd'}).'&autologin=1&enter=Sign+in');
-   do { setErr 'Cant get Zabbix Web Session ID'; return 0 }
+   return unless my $html=http_('GET','/?request=&name='.$SavedCreds{'login'}.'&password='.$uriEnc->encode($SavedCreds{'passwd'}).'&autologin=1&enter=Sign+in');
+   do { setErr 'Cant get Zabbix Web Session ID'; return }
     unless ($UserAgent{'SessionID'})=$html=~m/name="sid" value="([0-9a-f]+)"/;   
    $Config{'flWebLoginSuccess'}=1;
   }
@@ -415,10 +436,10 @@ sub zbx {
  
 # Set default params ->
  @{$req}{'jsonrpc','params','method','id'}=('2.0',getDefaultMethodParams($method),$method,0);
- 
+ my $zbxSessId;
 # <- Set default params
  given ($what2do) {
-  when (/^[a-z]+?\.[a-z]+$/) {
+  when (/^[a-z]+?\.[a-zA-Z]+$/) {
    my $userParams=shift;
    unless ( ref($userParams)=~m/^(?:ARRAY|HASH)?$/) {
     setErr 'You can specify only one of HASH-reference, ARRAY-reference of SCALAR as a second parameter for zbx()';
@@ -426,15 +447,35 @@ sub zbx {
    }
    $req->{'params'}=$userParams
   };
+  when ('cookieAuth') {
+   if ( @_ ) {
+    return unless zbx_set_cookie( shift );
+   } elsif (!(ref($oCookies) eq 'HTTP::Cookies')) {   
+    setErr 'No cookies. You must provide cookie file path or use zbx_set_cookie() before trying to access cookieAuth method';
+    return
+   }
+   $oCookies->scan(sub {
+    $zbxSessId=$_[2] if $_[1] eq 'zbx_sessionid' and defined($_[2]) and length($_[2]);
+   });
+   unless ($zbxSessId) {
+    setErr 'Cant find zbx_sessionid in your cookies';
+    return
+   }
+   @{$req}{'params','id'}=([$zbxSessId],0);
+  };
   when ('auth') {
-   if (!(@_ == 2 or @_ == 3)) {
-    setErr 'You must specify (only) login and password for auth';
-    return 0
+   if (!(@_ >= 2 and @_ <= 3)) {
+    setErr 'You must specify (only) login, password and (optionally) path to cookie-file for auth';
+    return
    }
    @SavedCreds{'login','passwd'}=(shift,shift);
+   if (@_ and ! ref $_[0]) {
+    my $cookieFile=shift;
+    return unless ref $oCookies eq 'HTTP::Cookies' or zbx_set_cookie($cookieFile);
+   }
    $req->{'params'}={'user'=>$SavedCreds{'login'},'password'=>$SavedCreds{'passwd'}};
    $req->{'id'}=0;
-  }; # <- auth  
+  }; # <- auth
   when ('logout') {
    @{$req}{'auth','id','params'}=($Config{'authToken'},1,{});
   }; # <- logout
@@ -457,7 +498,7 @@ sub zbx {
    my ($uid,$gid,$passwd)=(shift,shift,shift);
    if (!( $req->{'params'}{'usrgrps'}=[ zbx('searchGroup',{'status'=>0,'filter'=>{'name'=>$gid}})->[0] ] )) {
     setErr "Cant find group with name=$gid";
-    return 0;
+    return;
    }
    @{$req->{'params'}}{'passwd','alias'}=($passwd,$uid);
   }; # <- createUser
@@ -466,16 +507,16 @@ sub zbx {
    shift while defined($_[0]) and ref $_[0] ne 'HASH';
   };
   default { setErr 'Command '.$what2do.' is unsupported (yet). Please make request to maintainer to add this feature';
-            return 0 }
+            return }
  } # <- given ($what2do)
  if ( ref($APIPatcher{$what2do}{'before'}) eq 'CODE' ) {
-  return 0 unless &{$APIPatcher{$what2do}{'before'}}($req,\%flags);
+  return unless &{$APIPatcher{$what2do}{'before'}}($req,\%flags);
  }
  @{$req}{'auth','id'}=($Config{'authToken'},1) if $Config{'authToken'} and ! $mp->{'noauth'};
  my $pars=$req->{'params'};
  if ($method=~m/\.(?:delete|update)/ and ! ((ref($pars) eq 'ARRAY' and scalar(@$pars)) or (ref($pars) eq 'HASH' and %$pars))) {
   setErr 'Cant execute "delete" or "update" without parameters';
-  return 0;
+  return;
  }
  $req->{'params'}{'searchWildcardsEnabled'}=1 if ($method=~m/\.get$/ && ref($req->{'params'}{'search'}) eq 'HASH') and $Config{'flSearchWildcardsEnabled'} and ! defined $req->{'params'}{'searchWildcardsEnabled'};
  # Redefine global config variables if it is specified as a 3-rd parameter to zbx() ->
@@ -497,7 +538,7 @@ sub zbx {
  my $ans=$ua->request($http_post);
  unless ( $ans->is_success ) {
   setErr 'HTTP POST request failed for some reason. Please double check, what you requested';
-  return 0;
+  return;
  }
  my $JSONAns=$ans->decoded_content;
  $JSONRaw=$JSONAns;
@@ -507,7 +548,7 @@ sub zbx {
   if $ConfigCopy{'flDebug'} and ! ($ConfigCopy{'flDbgResultAsListSize'} and (index($JSONAns,'"result":[')+1)); 
  if ($JSONAns->{'error'}) {
   setErr('Error received from server in reply to JSON request: '.$JSONAns->{'error'}{'data'},$ConfigCopy{'flDieOnError'});
-  return 0;
+  return;
  }
  $rslt=$JSONAns->{'result'};
  if ( $ConfigCopy{'flDebug'} and $ConfigCopy{'flDbgResultAsListSize'} ) {
@@ -522,17 +563,29 @@ sub zbx {
   die 'Empty result set was returned from the Zabbix API' if $ConfigCopy{'flDieIfEmpty'};
   return (ref($rslt) eq 'ARRAY' and !$ConfigCopy{'flRetFalseIfEmpty'})?[]:0;
  }
- if ($what2do eq 'auth') {
-  print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
-  $Config{'authToken'}=$rslt;
- } elsif ($what2do eq 'logout') {
-  delete $Config{'authToken'};
-  web_logout if $Config{'flWebLoginSuccess'};
- } elsif ($what2do =~ m/search[a-zA-Z]+ByName/) {
-  return $rslt->[0];
+ given ($what2do) {
+  when ('auth') {
+   print STDERR "Got auth token=${rslt}\n" if $ConfigCopy{'flDebug'};
+   $Config{'authToken'}=$rslt;
+   if (ref $oCookies eq 'HTTP::Cookies') {
+    print STDERR "Saving zbx_sessionid cookie\n" if $ConfigCopy{'flDebug'};
+    die $! unless $oCookies->set_cookie( '1.1', 'zbx_sessionid'=>$rslt, '/', '', 80, 0 , 0, 3600*24*365);
+   }
+  };
+  when ('cookieAuth') {
+   if (ref($rslt) eq 'HASH') {
+    print STDERR "Got valid auth token=$zbxSessId from cookie file\n" if $ConfigCopy{'flDebug'};
+    $Config{'authToken'}=$zbxSessId
+   }
+  };
+  when ('logout') {
+   delete $Config{'authToken'};
+   web_logout if $Config{'flWebLoginSuccess'};
+  };
+  return $rslt->[0] when m/search[a-zA-Z]+ByName/;
  }
  if ( ref($APIPatcher{$what2do}{'after'}) eq 'CODE' ) {
-  return 0 unless &{$APIPatcher{$what2do}{'after'}}($rslt,\%flags);
+  return unless &{$APIPatcher{$what2do}{'after'}}($rslt,\%flags);
  }
  return $rslt;
 }
