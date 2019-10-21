@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 #
 # Monitoring::Zabipi is a simple, robust and clever way to access Zabbix API within Perl
-# (C) DRVTiny (Andrey Konovalov), 2014
+# (C) DRVTiny (Andrey Konovalov)
 # EMail: drvtiny // GMail
 # This software is licensed under GPL v3
 #
@@ -33,13 +33,17 @@ sub queue_get;
 sub zbx_get_dbhandle;
 sub fillHashInd;
 
-
-our @EXPORT_OK=qw(zbx zbx_set_cookie zbx_last_err zbx_json_raw zbx_api_url zbx_api_version zbx_get_dbhandle);
-our @EXPORT=@EXPORT_OK;
+our $VERSION = '0.15.7';
+our @EXPORT_OK = qw(zbx zbx_set_cookie zbx_last_err zbx_json_raw zbx_api_url zbx_api_version zbx_get_dbhandle);
+our @EXPORT = @EXPORT_OK;
 
 use constant {
-        DEFAULT_ITEM_DELAY=>30,
-        HASHED_PWD_PREFIX=>'{HASH}' 
+        DEFAULT_ITEM_DELAY	=> 30,
+        HASHED_PWD_PREFIX	=> '{HASH}',
+        FAILED 	=> 0,
+        DONE 	=> 1,
+        YES	=> 1,
+        NO	=> 0,
 };
 
 my (%Config,%ErrMsg,%UserAgent,%SavedCreds);
@@ -47,6 +51,7 @@ my $JSONRaw;
 
 my %cnfPar2cnfKey=(
         'debug'=>{     'type'=>'boolean',       'key'=>'flDebug'                 },
+        'use_proxy'=>{ 'type'=>'boolean',       'key'=>'flUseProxy'              },
         'pretty'=>{    'type'=>'boolean',       'key'=>'flPrettyJSON'            },
         'wildcards'=>{ 'type'=>'boolean',       'key'=>'flSearchWildcardsEnabled'},
         'timeout'=>{   'type'=>'integer',       'key'=>'rqTimeout'               },
@@ -56,13 +61,13 @@ my %cnfPar2cnfKey=(
         'dbPassword'=>'dbPass',
 );
 
-my %rx=(
-        'boolean'=>'^(?:y(?:es)?|true|ok|1|no?|false|0)$',
-        'integer'=>'^[-+]?[0-9]+$',
-        'float'=>'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
-        'dsnString'=>'^dbi:(?:[^:]*:)+(?:;[^=;]+=[^=;]+)*$',
-        'notEmptyString'=>'^.+$',
-        'anyString'=>'^.*$', 
+my %rx = (
+        'boolean'	=> '^(?:y(?:es)?|true|ok|1|no?|false|0)$',
+        'integer'	=> '^[-+]?[0-9]+$',
+        'float'		=> '^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$',
+        'dsnString'	=> '^dbi:(?:[^:]*:)+(?:;[^=;]+=[^=;]+)*$',
+        'notEmptyString'=> '^.+$',
+        'anyString'	=> '^.*$', 
 );
 
 my %Cmd2APIMethod=(
@@ -98,7 +103,7 @@ my %MethodPars = (
             'defpars'=>{'delay'=>DEFAULT_ITEM_DELAY},
         },
 );
-$MethodPars{'user.authenticate'}=$MethodPars{'user.login'};
+$MethodPars{'user.authenticate'} = $MethodPars{'user.login'};
 
 my $oCookies;
 
@@ -108,21 +113,21 @@ sub cnfPar2cnfKey_syn2orig {
 }
 $cnfPar2cnfKey{$_}=cnfPar2cnfKey_syn2orig($cnfPar2cnfKey{$_}) for grep !ref($cnfPar2cnfKey{$_}), keys %cnfPar2cnfKey;
 sub new {
- return 0 unless @_;
- my ($myname,$apiUrl,$hlOtherPars)=@_;
+ setErr('Insufficient number of arguments'), return(FAILED) unless @_;
+ my ($myname, $apiUrl, $hlOtherPars) = @_;
  $apiUrl="http://${apiUrl}/zabbix/api_jsonrpc.php" unless $apiUrl=~m%^https?://%;
  @Config{'apiUrl','authToken'}=($apiUrl,undef);
  $UserAgent{'dbHandle'}=undef;
  if (defined($hlOtherPars)) {
   unless (ref($hlOtherPars) eq 'HASH') {
    setErr('Last parameter of the "new" constructor (if present, and it is) must be a hash reference');
-   return 0;
+   return FAILED;
   }
   foreach my $cnfPar ( grep defined($cnfPar2cnfKey{$_}), keys %{$hlOtherPars} ) {
-   my ($v,$t,$k)=($hlOtherPars->{$cnfPar},@{$cnfPar2cnfKey{$cnfPar}}{'type','key'});
+   my ($v, $t, $k)=($hlOtherPars->{$cnfPar},@{$cnfPar2cnfKey{$cnfPar}}{'type','key'});
    unless ($v=~m/$rx{$t}/io) {
     setErr('Wrong parameter passed to the "new" constructor: '.$cnfPar.' must be '.$t);
-    return 0
+    return FAILED
    }
    ${&fillHashInd(\%Config,split /\./,$k)}=$t eq 'boolean'?($v=~m/y(?:es)?|true|1|ok/i?1:0):$v;
   }
@@ -135,32 +140,37 @@ sub new {
    } elsif ((ref $lstMethods2Dbg eq 'ARRAY') && @{$lstMethods2Dbg}) {
     $Config{'lstDebugMethods'}={ map { lc($_)=>1 } @{$lstMethods2Dbg} };
    } else {
-    print STDERR 'ERROR: List of the methods to debug may be: hashref, arrayref, string';
-    return 0;
+    setErr('List of the methods to debug may be: hashref, arrayref, string');
+    return FAILED
    }
   }  
  }
- ($UserAgent{'baseUrl'}=$apiUrl)=~s%/[^/]+$%%;
- my $ua = LWP::UserAgent->new('ssl_opts' => { 'verify_hostname' => 0 });
- $ua->cookie_jar({'autosave'=>1});
- $ua->show_progress($Config{'flDebug'}?1:0);
- $UserAgent{'reqObj'}=$ua; 
+ ($UserAgent{'baseUrl'} = $apiUrl) =~ s%/[^/]+$%%;
+ my $ua = LWP::UserAgent->new('ssl_opts' => { 'verify_hostname' => NO });
+ if ( $Config{'flUseProxy'} ) {
+   say STDERR 'Lets try to use environment proxy settings' if $Config{'flDebug'};
+   $ua->env_proxy
+ } 
+ $ua->cookie_jar({'autosave' => 1});
+ $ua->show_progress($Config{'flDebug'} ? 1 : 0);
+
+ $UserAgent{'reqObj'} = $ua; 
 # Try to get API version
  my $http_post = HTTP::Request->new('POST' => $apiUrl);
  $http_post->header('content-type' => 'application/json');
  $http_post->content('{"jsonrpc":"2.0","method":"apiinfo.version","params":[],"id":0}');
- my $r=$ua->request($http_post);
+ my $r = $ua->request($http_post);
  unless ( $r->is_success ) {
   setErr('Cant get API version info: Zabbix API seems to be configured incorrectly');
-  return 0
+  return FAILED
  }
- unless ( ($r->header('Content-Type')=~m/(.+)(?:;.+)?$/)[0] =~ m%/json$%i ) {
+ unless ( ($r->header('Content-Type') =~ m/(.+)(?:;.+)?$/)[0] =~ m%/json$%i ) {
    setErr('Cant get API version info: Unknown content-type in response headers');
-   return 0
+   return FAILED
  }
- $Config{'apiVersion'}=decode_json( $r->decoded_content )->{'result'};
- $Cmd2APIMethod{'auth'}='user.login' if [$Config{'apiVersion'}=~m/(\d+\.\d+)/]->[0] >= 2.4;
- return 1;
+ $Config{'apiVersion'} = decode_json( $r->decoded_content )->{'result'};
+ $Cmd2APIMethod{'auth'} = 'user.login' if [$Config{'apiVersion'} =~ m/(\d+\.\d+)/]->[0] >= 2.4;
+ return DONE
 }
 
 sub setErr {
