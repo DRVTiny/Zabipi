@@ -11,6 +11,11 @@ use utf8;
 #binmode(STDOUT, ":utf8");
 use strict;
 use warnings;
+
+# if you dont know, WDIM, read https://stackoverflow.com/questions/43376193/how-to-mute-that-when-and-given-are-experimental-in-perl
+use feature qw( switch );
+no if $] >= 5.018, warnings => qw( experimental::smartmatch );
+
 use DBI;
 use HTTP::Date qw(str2time);
 use Exporter qw(import);
