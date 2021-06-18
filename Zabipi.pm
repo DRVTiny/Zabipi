@@ -471,7 +471,8 @@ sub zbx {
     setErr 'Cant find zbx_sessionid in your cookies';
     return
    }
-   @{$req}{'params','id'}=([$zbxSessId],0);
+   $req->{'params'}={'sessionid'=>$zbxSessId};
+   $req->{'id'}=0;
   };
   when ('auth') {
    if (!(@_ >= 2 and @_ <= 3)) {
