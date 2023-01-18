@@ -15,8 +15,6 @@ You're welcome to ask any questions, request any features, etc.
 Dont hessitate, write to me, write now! :)
 
   email: drvtiny (AT) gmail.com
-  skype: konovalov-aa
-  mobile: +{seven}-{ninety}3-2919594
-
+  
 With best regards,
 Andrey Konovalov aka DRVTiny
